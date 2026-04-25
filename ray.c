@@ -17,6 +17,8 @@ V norm(V a) { float l = sqrtf(a.x*a.x + a.y*a.y + a.z*a.z); return mul(a, 1.0f/l
 float dot(V a, V b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 V cross(V a, V b) { return (V){a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
 
+typedef struct { V c; float r; } Sphere;
+
 // Sphere intersection (center c, radius r)
 int hit_sphere(V o, V d, V c, float r, float *t) {
  V oc = sub(o, c);
@@ -27,6 +29,32 @@ int hit_sphere(V o, V d, V c, float r, float *t) {
  if (delta < 0) return 0;
  *t = (-b - sqrtf(delta)) / (2.0f * a);
  return *t > EPS;
+}
+
+// Hit any of the 4 spheres (pyramid: 3 bottom, 1 top)
+int hit_any_sphere(V o, V d, float *t, V *hit_normal) {
+ Sphere spheres[4] = {
+  {(V){-3.5, 2.5, 2.5}, 4.0f},  // Bottom front left (triangle corner)
+  {(V){3.5, 2.5, 2.5}, 4.0f},   // Bottom front right (triangle corner)
+  {(V){0, 2.5, -3}, 4.0f},      // Bottom back (triangle corner)
+  {(V){0, 7, 0}, 4.0f}          // Top (centered above triangle)
+ };
+ 
+ float best_t = 1e9f;
+ int hit = 0;
+ 
+ for (int i = 0; i < 4; i++) {
+  float t_i;
+  if (hit_sphere(o, d, spheres[i].c, spheres[i].r, &t_i) && t_i < best_t) {
+   best_t = t_i;
+   hit = 1;
+   V p = add(o, mul(d, t_i));
+   *hit_normal = norm(sub(p, spheres[i].c));
+ }
+ }
+ 
+ if (hit) *t = best_t;
+ return hit;
 }
 
 // Floor (y=0) intersection
@@ -59,7 +87,8 @@ V trace_ray(V o, V d, int depth) {
  if (depth > 4) return (V){0,0,0};  // Max reflection depth
 
  float t_s, t_f;
- int hs = hit_sphere(o, d, (V){0, 4, 0}, 4.0f, &t_s);
+ V hit_normal;
+ int hs = hit_any_sphere(o, d, &t_s, &hit_normal);
  int hf = hit_floor(o, d, &t_f);
 
  V color;
@@ -67,7 +96,7 @@ V trace_ray(V o, V d, int depth) {
  if (hs && (!hf || t_s < t_f)) {
   // Hit sphere - mirror-like with specular highlight
   V p = add(o, mul(d, t_s));
-  V n = norm(sub(p, (V){0, 4, 0}));
+  V n = hit_normal;  // Already computed by hit_any_sphere
   
   // Light direction (sun in upper right)
   V light = norm((V){1, 2, 1});
