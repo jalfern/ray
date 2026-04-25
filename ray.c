@@ -5,6 +5,7 @@
 #define WIDTH 400
 #define HEIGHT 400
 #define EPS 1e-4f
+#define AA_SAMPLES 2  // 2x2 supersampling
 
 typedef struct { float x, y, z; } V;
 
@@ -43,6 +44,29 @@ V floor_color(V p) {
  return (V){pat ? 0.2f : 0.8f, pat ? 0.2f : 0.8f, pat ? 0.2f : 0.8f};
 }
 
+// Trace a single ray, returns color
+V trace_ray(V o, V d) {
+ float t_s, t_f;
+ int hs = hit_sphere(o, d, (V){0, 2, 0}, 2.0f, &t_s);
+ int hf = hit_floor(o, d, &t_f);
+
+ if (hs && (!hf || t_s < t_f)) {
+ // Hit sphere
+ V p = add(o, mul(d, t_s));
+ V n = norm(sub(p, (V){0, 2, 0}));
+ // 50% reflective ray
+ V refl = sub(d, mul(n, 2.0f * dot(d, n)));
+ V rp = add(p, mul(refl, EPS)); // Avoid self-intersection
+ V fc = floor_color(rp);
+ // 50% reflection + 50% diffuse white base
+ return add(mul(fc, 0.5f), mul((V){0.85f,0.85f,0.85f}, 0.5f));
+ } else {
+ // Hit floor directly
+ V p = add(o, mul(d, t_f));
+ return floor_color(p);
+ }
+}
+
 int main() {
  V cam = (V){0, 10, 20};
  V tgt = (V){0, 0, 0};
@@ -51,44 +75,35 @@ int main() {
  V up = cross(fwd, right);
  float asp = (float)WIDTH / HEIGHT;
 
- V sph_c = (V){0, 2, 0}; // Center on floor
- float sph_r = 2.0f;
-
  // Output PPM header
  printf("P6\n%d %d\n255\n", WIDTH, HEIGHT);
 
  for (int y = 0; y < HEIGHT; y++) {
  for (int x = 0; x < WIDTH; x++) {
- // UV coordinates (-1 to 1)
- float uv_x = (2.0f*(x+0.5f)/WIDTH - 1.0f) * asp;
- float uv_y = 1.0f - 2.0f*(y+0.5f)/HEIGHT;
+ V color_sum = {0, 0, 0};
+ int sample_count = 0;
+
+ // 2x2 supersampling
+ for (int sy = 0; sy < AA_SAMPLES; sy++) {
+ for (int sx = 0; sx < AA_SAMPLES; sx++) {
+ // UV coordinates (-1 to 1) with sub-pixel offset
+ float uv_x = (2.0f*(x + 0.5f + sx/AA_SAMPLES - 0.5f/AA_SAMPLES)/WIDTH - 1.0f) * asp;
+ float uv_y = 1.0f - 2.0f*(y + 0.5f + sy/AA_SAMPLES - 0.5f/AA_SAMPLES)/HEIGHT;
  V ray = norm(add(add(fwd, mul(right, uv_x)), mul(up, uv_y)));
 
- float t_s, t_f;
- int hs = hit_sphere(cam, ray, sph_c, sph_r, &t_s);
- int hf = hit_floor(cam, ray, &t_f);
-
- V color;
- if (hs && (!hf || t_s < t_f)) {
- // Hit sphere
- V p = add(cam, mul(ray, t_s));
- V n = norm(sub(p, sph_c));
- // 50% reflective ray
- V refl = sub(ray, mul(n, 2.0f * dot(ray, n)));
- V rp = add(p, mul(refl, EPS)); // Avoid self-intersection
- V fc = floor_color(rp);
- // 50% reflection + 50% diffuse white base
- color = add(mul(fc, 0.5f), mul((V){0.85f,0.85f,0.85f}, 0.5f));
- } else {
- // Hit floor directly
- V p = add(cam, mul(ray, t_f));
- color = floor_color(p);
+ V color = trace_ray(cam, ray);
+ color_sum = add(color_sum, color);
+ sample_count++;
+ }
  }
 
+ // Average the samples
+ V color_avg = mul(color_sum, 1.0f/sample_count);
+
  // Clamp & convert to 8-bit
- uint8_t cr = (uint8_t)(fminf(fmaxf(color.x, 0.0f), 1.0f) * 255.0f);
- uint8_t cg = (uint8_t)(fminf(fmaxf(color.y, 0.0f), 1.0f) * 255.0f);
- uint8_t cb = (uint8_t)(fminf(fmaxf(color.z, 0.0f), 1.0f) * 255.0f);
+ uint8_t cr = (uint8_t)(fminf(fmaxf(color_avg.x, 0.0f), 1.0f) * 255.0f);
+ uint8_t cg = (uint8_t)(fminf(fmaxf(color_avg.y, 0.0f), 1.0f) * 255.0f);
+ uint8_t cb = (uint8_t)(fminf(fmaxf(color_avg.z, 0.0f), 1.0f) * 255.0f);
  fputc(cr, stdout); fputc(cg, stdout); fputc(cb, stdout);
  }
  }
