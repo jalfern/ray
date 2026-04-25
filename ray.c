@@ -5,7 +5,7 @@
 #define WIDTH 400
 #define HEIGHT 400
 #define EPS 1e-4f
-#define AA_SAMPLES 2  // 2x2 supersampling
+#define AA_SAMPLES 4  // 4x4 supersampling (16 samples per pixel)
 
 typedef struct { float x, y, z; } V;
 
@@ -36,35 +36,72 @@ int hit_floor(V o, V d, float *t) {
  return *t > EPS;
 }
 
-// Checkerboard pattern
+// Three shades of blue for checkerboard
 V floor_color(V p) {
  int ix = (int)floorf(p.x);
  int iz = (int)floorf(p.z);
- int pat = (ix + iz) & 1;
- return (V){pat ? 0.2f : 0.8f, pat ? 0.2f : 0.8f, pat ? 0.2f : 0.8f};
+ int sum = ix + iz;
+ int shade = sum % 3;  // 0, 1, or 2 for three shades
+ if (shade == 0) {
+  // Darkest blue
+  return (V){0.08f, 0.12f, 0.25f};
+ } else if (shade == 1) {
+  // Medium blue
+  return (V){0.25f, 0.4f, 0.7f};
+ } else {
+  // Light blue
+  return (V){0.5f, 0.65f, 0.95f};
+ }
 }
 
 // Trace a single ray, returns color
-V trace_ray(V o, V d) {
+V trace_ray(V o, V d, int depth) {
+ if (depth > 4) return (V){0,0,0};  // Max reflection depth
+
  float t_s, t_f;
  int hs = hit_sphere(o, d, (V){0, 2, 0}, 2.0f, &t_s);
  int hf = hit_floor(o, d, &t_f);
 
+ V color;
+
  if (hs && (!hf || t_s < t_f)) {
- // Hit sphere
- V p = add(o, mul(d, t_s));
- V n = norm(sub(p, (V){0, 2, 0}));
- // 50% reflective ray
- V refl = sub(d, mul(n, 2.0f * dot(d, n)));
- V rp = add(p, mul(refl, EPS)); // Avoid self-intersection
- V fc = floor_color(rp);
- // 50% reflection + 50% diffuse white base
- return add(mul(fc, 0.5f), mul((V){0.85f,0.85f,0.85f}, 0.5f));
+  // Hit sphere - mirror-like with specular highlight
+  V p = add(o, mul(d, t_s));
+  V n = norm(sub(p, (V){0, 2, 0}));
+  
+  // Light direction (sun in upper right)
+  V light = norm((V){1, 2, 1});
+  
+  // View direction (from camera to hit point)
+  V view = norm(sub(o, p));
+  
+  // Specular highlight (Blinn-Phong)
+  V half = norm(add(light, view));
+  float spec = powf(fmaxf(0.0f, dot(n, half)), 64.0f);  // High shininess for mirror-like
+  
+  // 50% reflection ray
+  V refl = sub(d, mul(n, 2.0f * dot(d, n)));
+  V rp = add(p, mul(refl, EPS));
+  
+  // Recursive reflection (mirror effect)
+  V refl_color = trace_ray(rp, refl, depth + 1);
+  
+  // Combine: ambient + specular + reflection
+  V ambient = (V){0.1f, 0.1f, 0.15f};  // Dark blue-ish ambient
+  V spec_color = (V){1.0f, 1.0f, 1.0f};  // White specular highlight
+  color = add(ambient, mul(spec_color, spec * 0.8f));  // Specular contribution
+  color = add(color, mul(refl_color, 0.7f));  // 70% reflection (mirror-like)
+  
+ } else if (hf) {
+  // Hit floor directly
+  V p = add(o, mul(d, t_f));
+  color = floor_color(p);
  } else {
- // Hit floor directly
- V p = add(o, mul(d, t_f));
- return floor_color(p);
+  // Miss everything - background
+  color = (V){0.05f, 0.05f, 0.1f};  // Dark blue-black
  }
+
+ return color;
 }
 
 int main() {
@@ -83,15 +120,18 @@ int main() {
  V color_sum = {0, 0, 0};
  int sample_count = 0;
 
- // 2x2 supersampling
+ // 4x4 supersampling
  for (int sy = 0; sy < AA_SAMPLES; sy++) {
  for (int sx = 0; sx < AA_SAMPLES; sx++) {
+ // Sub-pixel position (centered in each sub-pixel)
+ float sample_x = (float)(sx + 0.5f) / AA_SAMPLES;
+ float sample_y = (float)(sy + 0.5f) / AA_SAMPLES;
  // UV coordinates (-1 to 1) with sub-pixel offset
- float uv_x = (2.0f*(x + 0.5f + sx/AA_SAMPLES - 0.5f/AA_SAMPLES)/WIDTH - 1.0f) * asp;
- float uv_y = 1.0f - 2.0f*(y + 0.5f + sy/AA_SAMPLES - 0.5f/AA_SAMPLES)/HEIGHT;
+ float uv_x = (2.0f*(x + sample_x)/WIDTH - 1.0f) * asp;
+ float uv_y = 1.0f - 2.0f*(y + sample_y)/HEIGHT;
  V ray = norm(add(add(fwd, mul(right, uv_x)), mul(up, uv_y)));
 
- V color = trace_ray(cam, ray);
+ V color = trace_ray(cam, ray, 0);
  color_sum = add(color_sum, color);
  sample_count++;
  }
