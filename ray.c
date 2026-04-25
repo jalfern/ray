@@ -59,7 +59,7 @@ V trace_ray(V o, V d, int depth) {
  if (depth > 4) return (V){0,0,0};  // Max reflection depth
 
  float t_s, t_f;
- int hs = hit_sphere(o, d, (V){0, 2, 0}, 2.0f, &t_s);
+ int hs = hit_sphere(o, d, (V){0, 4, 0}, 4.0f, &t_s);
  int hf = hit_floor(o, d, &t_f);
 
  V color;
@@ -67,7 +67,7 @@ V trace_ray(V o, V d, int depth) {
  if (hs && (!hf || t_s < t_f)) {
   // Hit sphere - mirror-like with specular highlight
   V p = add(o, mul(d, t_s));
-  V n = norm(sub(p, (V){0, 2, 0}));
+  V n = norm(sub(p, (V){0, 4, 0}));
   
   // Light direction (sun in upper right)
   V light = norm((V){1, 2, 1});
