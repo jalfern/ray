@@ -4,7 +4,8 @@
     {"pos": [-3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7},
     {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7},
     {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.7},
-    {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7}
+    {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7},
+    {"pos": [0, 10, 2], "radius": 3, "reflectivity": 0.9}
   ],
   "light": {"pos": [1, 2, 1]},
   "floor": {"checkerboard": true},
