@@ -12,6 +12,7 @@ typedef struct {
     Vec3 pos;
     float radius;
     float reflectivity;
+    Vec3 color;  // RGB color, defaults to white
 } Sphere;
 
 typedef struct {
@@ -88,6 +89,9 @@ static char* parse_sphere(char* p, Sphere* s) {
     if (*p != '{') return NULL;
     p++;
     
+    // Default: white color
+    s->color = (Vec3){1.0f, 1.0f, 1.0f};
+    
     while (*p && *p != '}') {
         char key[64];
         p = parse_string(p, key, sizeof(key));
@@ -103,6 +107,8 @@ static char* parse_sphere(char* p, Sphere* s) {
             p = parse_float(p, &s->radius);
         } else if (strcmp(key, "reflectivity") == 0) {
             p = parse_float(p, &s->reflectivity);
+        } else if (strcmp(key, "color") == 0) {
+            p = parse_vec3(p, &s->color);
         } else {
             while (*p && *p != ',' && *p != '}') p++;
         }

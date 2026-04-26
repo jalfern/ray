@@ -1,11 +1,11 @@
 {
   "camera": {"pos": [0, 10, 20], "target": [0, 0, 0]},
   "spheres": [
-    {"pos": [-3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7},
-    {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7},
-    {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.7},
-    {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7},
-    {"pos": [0, 10, 2], "radius": 3, "reflectivity": 0.9}
+    {"pos": [-3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0]},
+    {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0]},
+    {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0]},
+    {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0]},
+    {"pos": [0, 10, 2], "radius": 3, "reflectivity": 0.9, "color": [1.0, 0.2, 0.2]}
   ],
   "light": {"pos": [1, 2, 1]},
   "floor": {"checkerboard": true},

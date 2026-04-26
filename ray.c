@@ -23,7 +23,7 @@ V norm(V a) {
 float dot(V a, V b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 V cross(V a, V b) { return (V){a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
 
-typedef struct { V c; float r; float ref; } SphereData;
+typedef struct { V c; float r; float ref; V col; } SphereData;
 
 // Sphere intersection
 int hit_sphere(V o, V d, V c, float r, float *t) {
@@ -38,24 +38,24 @@ int hit_sphere(V o, V d, V c, float r, float *t) {
 }
 
 // Hit any sphere from scene
-int hit_any_sphere(V o, V d, float *t, V *hit_normal, SphereData* spheres, int num_spheres) {
+int hit_any_sphere(V o, V d, float *t, V *hit_normal, int *hit_idx, SphereData* spheres, int num_spheres) {
     float best_t = 1e9f;
     int hit = 0;
-    int hit_idx = -1;
+    *hit_idx = -1;
     
     for (int i = 0; i < num_spheres; i++) {
         float t_i;
         if (hit_sphere(o, d, spheres[i].c, spheres[i].r, &t_i) && t_i < best_t) {
             best_t = t_i;
             hit = 1;
-            hit_idx = i;
+            *hit_idx = i;
         }
     }
     
     if (hit) {
         *t = best_t;
         V p = add(o, mul(d, best_t));
-        *hit_normal = norm(sub(p, spheres[hit_idx].c));
+        *hit_normal = norm(sub(p, spheres[*hit_idx].c));
     }
     
     return hit;
@@ -85,7 +85,8 @@ V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V light_d
 
     float t_s, t_f;
     V hit_normal;
-    int hs = hit_any_sphere(o, d, &t_s, &hit_normal, spheres, num_spheres);
+    int hit_idx = -1;
+    int hs = hit_any_sphere(o, d, &t_s, &hit_normal, &hit_idx, spheres, num_spheres);
     int hf = hit_floor(o, d, &t_f);
 
     V color;
@@ -93,6 +94,9 @@ V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V light_d
     if (hs && (!hf || t_s < t_f)) {
         V p = add(o, mul(d, t_s));
         V n = hit_normal;
+        
+        // Get sphere color
+        V sphere_col = spheres[hit_idx].col;
         
         // Specular highlight (Blinn-Phong)
         V view = norm(sub(o, p));
@@ -104,19 +108,12 @@ V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V light_d
         V rp = add(p, mul(refl, EPS));
         V refl_color = trace_ray(rp, refl, depth + 1, spheres, num_spheres, light_dir);
         
-        // Find this sphere's reflectivity
-        float reflectivity = 0.7f;
-        for (int i = 0; i < num_spheres; i++) {
-            if (hit_sphere(add(o,mul(d,t_s-EPS)), d, spheres[i].c, spheres[i].r, &t_s)) {
-                reflectivity = spheres[i].ref;
-                break;
-            }
-        }
+        float reflectivity = spheres[hit_idx].ref;
         
-        V ambient = (V){0.1f, 0.1f, 0.15f};
-        V spec_color = (V){1.0f, 1.0f, 1.0f};
-        color = add(ambient, mul(spec_color, spec * 0.8f));
-        color = add(color, mul(refl_color, reflectivity));
+        V ambient = mul(sphere_col, 0.1f);
+        V spec_color = sphere_col;
+        V base_color = add(ambient, mul(spec_color, spec * 0.8f));
+        color = add(base_color, mul(refl_color, reflectivity));
         
     } else if (hf) {
         V p = add(o, mul(d, t_f));
@@ -152,6 +149,7 @@ int main(int argc, char** argv) {
         spheres[i].c = (V){scene.spheres[i].pos.x, scene.spheres[i].pos.y, scene.spheres[i].pos.z};
         spheres[i].r = scene.spheres[i].radius;
         spheres[i].ref = scene.spheres[i].reflectivity;
+        spheres[i].col = (V){scene.spheres[i].color.x, scene.spheres[i].color.y, scene.spheres[i].color.z};
     }
     
     V fwd = norm(sub(tgt, cam));
