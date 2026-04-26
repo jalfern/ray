@@ -23,7 +23,7 @@ V norm(V a) {
 float dot(V a, V b) { return a.x*b.x + a.y*b.y + a.z*b.z; }
 V cross(V a, V b) { return (V){a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
 
-typedef struct { V c; float r; float ref; V col; } SphereData;
+typedef struct { V c; float r; float ref; V col; char mat[16]; } SphereData;
 
 // Sphere intersection
 int hit_sphere(V o, V d, V c, float r, float *t) {
@@ -98,22 +98,32 @@ V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V light_d
         // Get sphere color
         V sphere_col = spheres[hit_idx].col;
         
+        // Determine material type
+        int is_plastic = (strcmp(spheres[hit_idx].mat, "plastic") == 0);
+        
         // Specular highlight (Blinn-Phong)
         V view = norm(sub(o, p));
         V half = norm(add(light_dir, view));
-        float spec = powf(fmaxf(0.0f, dot(n, half)), 64.0f);
-        
-        // Reflection
-        V refl = sub(d, mul(n, 2.0f * dot(d, n)));
-        V rp = add(p, mul(refl, EPS));
-        V refl_color = trace_ray(rp, refl, depth + 1, spheres, num_spheres, light_dir);
+        float spec = powf(fmaxf(0.0f, dot(n, half)), is_plastic ? 32.0f : 64.0f);
         
         float reflectivity = spheres[hit_idx].ref;
         
         V ambient = mul(sphere_col, 0.1f);
         V spec_color = sphere_col;
-        V base_color = add(ambient, mul(spec_color, spec * 0.8f));
-        color = add(base_color, mul(refl_color, reflectivity));
+        
+        // Plastic has lower specular strength
+        float spec_strength = is_plastic ? 0.4f : 0.8f;
+        V base_color = add(ambient, mul(spec_color, spec * spec_strength));
+        
+        // Only reflect for glass materials
+        if (!is_plastic) {
+            V refl = sub(d, mul(n, 2.0f * dot(d, n)));
+            V rp = add(p, mul(refl, EPS));
+            V refl_color = trace_ray(rp, refl, depth + 1, spheres, num_spheres, light_dir);
+            color = add(base_color, mul(refl_color, reflectivity));
+        } else {
+            color = base_color;
+        }
         
     } else if (hf) {
         V p = add(o, mul(d, t_f));
@@ -150,6 +160,7 @@ int main(int argc, char** argv) {
         spheres[i].r = scene.spheres[i].radius;
         spheres[i].ref = scene.spheres[i].reflectivity;
         spheres[i].col = (V){scene.spheres[i].color.x, scene.spheres[i].color.y, scene.spheres[i].color.z};
+        strcpy(spheres[i].mat, scene.spheres[i].material[0] ? scene.spheres[i].material : "glass");
     }
     
     V fwd = norm(sub(tgt, cam));
