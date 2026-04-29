@@ -1,32 +1,8 @@
+#include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-
-// Simple JSON parser for scene files
-// Assumes well-formed JSON (no error handling for brevity)
-
-typedef struct { float x, y, z; } Vec3;
-
-typedef struct {
-    Vec3 pos;
-    float radius;
-    float reflectivity;
-    Vec3 color;
-    char material[16];  // "glass" (default) or "plastic"
-} Sphere;
-
-typedef struct {
-    Vec3 camera_pos;
-    Vec3 camera_target;
-    Vec3 light_pos;
-    Sphere* spheres;
-    int num_spheres;
-    int width;
-    int height;
-    int has_floor;
-    char output[256];
-} Scene;
 
 static char* skip_ws(char* p) {
     while (*p && isspace(*p)) p++;
@@ -90,7 +66,6 @@ static char* parse_sphere(char* p, Sphere* s) {
     if (*p != '{') return NULL;
     p++;
     
-    // Defaults: white color, glass material
     s->color = (Vec3){1.0f, 1.0f, 1.0f};
     strcpy(s->material, "glass");
     
@@ -143,9 +118,9 @@ static char* parse_spheres_array(char* p, Scene* scene) {
     return p;
 }
 
-int parse_scene(const char* filename, Scene* scene) {
+Scene* parse_scene(const char* filename) {
     FILE* f = fopen(filename, "r");
-    if (!f) return -1;
+    if (!f) return NULL;
     
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
@@ -157,15 +132,15 @@ int parse_scene(const char* filename, Scene* scene) {
     fclose(f);
     
     char* p = skip_ws(json);
-    if (*p != '{') { free(json); return -1; }
+    if (*p != '{') { free(json); return NULL; }
     p++;
     
+    Scene* scene = calloc(1, sizeof(Scene));
     scene->width = 400;
     scene->height = 400;
     scene->has_floor = 0;
     scene->num_spheres = 0;
     scene->spheres = NULL;
-    scene->output[0] = '\0';
     
     while (*p && *p != '}') {
         char key[64];
@@ -257,5 +232,12 @@ int parse_scene(const char* filename, Scene* scene) {
     }
     
     free(json);
-    return 0;
+    return scene;
+}
+
+void free_scene(Scene* scene) {
+    if (scene) {
+        free(scene->spheres);
+        free(scene);
+    }
 }

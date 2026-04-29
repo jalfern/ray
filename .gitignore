@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# Executable
+ray2
+
+# Output files
+output.ppm
+output.png
+
+# IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
