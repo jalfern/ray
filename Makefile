@@ -1,18 +1,21 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -O2 -I./include
-LDFLAGS = -lm -lz
+CXX = g++
+CXXFLAGS = -Wall -Wextra -O2 -I./include -std=c++11
+LDFLAGS = -lm -lz -framework Metal -framework Foundation
 
 SRC_DIR = src
 BUILD_DIR = build
 
-SOURCES = $(SRC_DIR)/main.c \
-          $(SRC_DIR)/vector/vector.c \
-          $(SRC_DIR)/parser/parser.c \
-          $(SRC_DIR)/renderer/renderer.c \
-          $(SRC_DIR)/output/output.c \
-          $(SRC_DIR)/shading/shading.c
+SOURCES = $(SRC_DIR)/main.cc \
+          $(SRC_DIR)/vector/vector.cc \
+          $(SRC_DIR)/parser/parser.cc \
+          $(SRC_DIR)/renderer/renderer.cc \
+          $(SRC_DIR)/output/output.cc \
+          $(SRC_DIR)/shading/shading.cc
 
-OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
+MM_SOURCES = $(SRC_DIR)/renderer/gpu_renderer.mm
+
+OBJECTS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(SOURCES))
+OBJECTS += $(patsubst $(SRC_DIR)/%.mm,$(BUILD_DIR)/%.o,$(MM_SOURCES))
 
 TARGET = ray2
 
@@ -21,11 +24,15 @@ TARGET = ray2
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -o $@ $(LDFLAGS)
+	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/renderer/gpu_renderer.o: $(SRC_DIR)/renderer/gpu_renderer.mm
+	mkdir -p $(BUILD_DIR)/renderer
+	$(CXX) $(CXXFLAGS) -ObjC++ -c $< -o $@ -fobjc-arc
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

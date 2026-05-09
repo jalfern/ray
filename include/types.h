@@ -10,7 +10,7 @@ typedef struct {
     float r;      // radius
     float ref;    // reflectivity
     V col;        // color
-    char mat[16]; // material name
+    int mat_type; // 0=glass (reflective), 1=plastic (matte)
 } SphereData;
 
 #endif

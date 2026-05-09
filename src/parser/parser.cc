@@ -108,7 +108,7 @@ static char* parse_spheres_array(char* p, Scene* scene) {
     
     while (*p && *p != ']') {
         scene->num_spheres++;
-        scene->spheres = realloc(scene->spheres, scene->num_spheres * sizeof(Sphere));
+        scene->spheres = (Sphere*)realloc(scene->spheres, scene->num_spheres * sizeof(Sphere));
         p = parse_sphere(p, &scene->spheres[scene->num_spheres - 1]);
         if (!p) return NULL;
         p = skip_ws(p);
@@ -126,7 +126,7 @@ Scene* parse_scene(const char* filename) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     
-    char* json = malloc(size + 1);
+    char* json = (char*)malloc(size + 1);
     fread(json, 1, size, f);
     json[size] = '\0';
     fclose(f);
@@ -135,7 +135,7 @@ Scene* parse_scene(const char* filename) {
     if (*p != '{') { free(json); return NULL; }
     p++;
     
-    Scene* scene = calloc(1, sizeof(Scene));
+    Scene* scene = (Scene*)calloc(1, sizeof(Scene));
     scene->width = 400;
     scene->height = 400;
     scene->has_floor = 0;
@@ -203,6 +203,53 @@ Scene* parse_scene(const char* filename) {
         } else if (strcmp(key, "spheres") == 0) {
             p = parse_spheres_array(p, scene);
             if (!p) break;
+        } else if (strcmp(key, "animation") == 0) {
+            scene->has_animation = 1;
+            if (*p == '{') p++;
+            while (*p && *p != '}') {
+                char akey[64];
+                p = parse_string(p, akey, sizeof(akey));
+                if (!p) break;
+                p = skip_ws(p);
+                if (*p != ':') break;
+                p++;
+                p = skip_ws(p);
+
+                if (strcmp(akey, "duration") == 0) {
+                    p = parse_float(p, &scene->animation.duration);
+                } else if (strcmp(akey, "fps") == 0) {
+                    p = parse_int(p, &scene->animation.fps);
+                } else if (strcmp(akey, "orbit") == 0) {
+                    if (*p == '{') p++;
+                    while (*p && *p != '}') {
+                        char okey[64];
+                        p = parse_string(p, okey, sizeof(okey));
+                        if (!p) break;
+                        p = skip_ws(p);
+                        if (*p != ':') break;
+                        p++;
+                        p = skip_ws(p);
+
+                        if (strcmp(okey, "center") == 0) {
+                            p = parse_vec3(p, &scene->animation.orbit_center);
+                        } else if (strcmp(okey, "radius") == 0) {
+                            p = parse_float(p, &scene->animation.orbit_radius);
+                        } else if (strcmp(okey, "height") == 0) {
+                            p = parse_float(p, &scene->animation.orbit_height);
+                        } else {
+                            while (*p && *p != ',' && *p != '}') p++;
+                        }
+                        p = skip_ws(p);
+                        if (*p == ',') p++;
+                    }
+                    if (*p == '}') p++;
+                } else {
+                    while (*p && *p != ',' && *p != '}') p++;
+                }
+                p = skip_ws(p);
+                if (*p == ',') p++;
+            }
+            if (*p == '}') p++;
         } else if (strcmp(key, "floor") == 0) {
             if (*p == '{') p++;
             while (*p && *p != '}') {

@@ -14,6 +14,14 @@ typedef struct {
 } Sphere;
 
 typedef struct {
+    float duration;
+    int fps;
+    Vec3 orbit_center;
+    float orbit_radius;
+    float orbit_height;
+} AnimationConfig;
+
+typedef struct {
     Vec3 camera_pos;
     Vec3 camera_target;
     Vec3 light_pos;
@@ -23,6 +31,8 @@ typedef struct {
     int height;
     int has_floor;
     char output[256];
+    int has_animation;
+    AnimationConfig animation;
 } Scene;
 
 #endif

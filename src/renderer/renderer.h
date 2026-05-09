@@ -7,5 +7,6 @@
 #include "../shading/shading.h"
 
 Image* render_frame(const Scene* scene);
+Image* render_frame_parallel(const Scene* scene, int num_threads);
 
 #endif

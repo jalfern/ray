@@ -5,11 +5,20 @@
     {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
     {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
     {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
-    {"pos": [0, 10, 2], "radius": 3, "reflectivity": 0.1, "color": [1.0, 0.2, 0.2], "material": "plastic"}
+    {"pos": [0, 15, 2], "radius": 3, "reflectivity": 0.1, "color": [1.0, 0.2, 0.2], "material": "plastic"}
   ],
-  "light": {"pos": [1, 2, 1]},
+  "light": {"pos": [5, 15, 5]},
   "floor": {"checkerboard": true},
-  "output": "output.png",
-  "width": 400,
-  "height": 400
+  "animation": {
+    "duration": 10,
+    "fps": 24,
+    "orbit": {
+      "center": [0, 5, 0],
+      "radius": 25,
+      "height": 10
+    }
+  },
+  "output": "output.mp4",
+  "width": 1024,
+  "height": 768
 }

@@ -7,10 +7,10 @@
 #define EPS 1e-4f
 
 Image* create_image(int width, int height) {
-    Image* img = malloc(sizeof(Image));
+    Image* img = (Image*)malloc(sizeof(Image));
     img->width = width;
     img->height = height;
-    img->data = calloc(width * height * 3, 1);
+    img->data = (unsigned char*)calloc(width * height * 3, 1);
     return img;
 }
 
@@ -81,7 +81,7 @@ int write_png(const Image* img, const char* filename) {
     
     // Compress pixel data with filter byte per row
     size_t raw_size = (img->width * 3 + 1) * img->height;
-    unsigned char* raw = malloc(raw_size);
+    unsigned char* raw = (unsigned char*)malloc(raw_size);
     for (int y = 0; y < img->height; y++) {
         raw[y * (img->width * 3 + 1)] = 0; // None filter
         memcpy(raw + y * (img->width * 3 + 1) + 1,
@@ -90,7 +90,7 @@ int write_png(const Image* img, const char* filename) {
     }
     
     uLong comp_len = compressBound(raw_size);
-    unsigned char* compressed = malloc(comp_len);
+    unsigned char* compressed = (unsigned char*)malloc(comp_len);
     compress2(compressed, &comp_len, raw, raw_size, Z_DEFAULT_COMPRESSION);
     free(raw);
     

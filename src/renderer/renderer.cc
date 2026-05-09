@@ -4,6 +4,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <thread>
+#include <vector>
 
 #define EPS 1e-4f
 #define AA_SAMPLES 4
@@ -81,7 +83,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V 
         V p = add(o, mul(d, t_s));
         V n = hit_normal;
         V sphere_col = spheres[hit_idx].col;
-        int is_plastic = (strcmp(spheres[hit_idx].mat, "plastic") == 0);
+        int is_plastic = (spheres[hit_idx].mat_type == 1);
         
         V to_light = sub(light_pos, p);
         V light_dir = norm(to_light);
@@ -127,29 +129,19 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V 
     return color;
 }
 
-Image* render_frame(const Scene* scene) {
-    V cam = (V){scene->camera_pos.x, scene->camera_pos.y, scene->camera_pos.z};
-    V tgt = (V){scene->camera_target.x, scene->camera_target.y, scene->camera_target.z};
-    V light_pos = (V){scene->light_pos.x, scene->light_pos.y, scene->light_pos.z};
-    
-    SphereData* spheres = malloc(scene->num_spheres * sizeof(SphereData));
-    for (int i = 0; i < scene->num_spheres; i++) {
-        spheres[i].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
-        spheres[i].r = scene->spheres[i].radius;
-        spheres[i].ref = scene->spheres[i].reflectivity;
-        spheres[i].col = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
-        strcpy(spheres[i].mat, scene->spheres[i].material[0] ? scene->spheres[i].material : "glass");
-    }
-    
-    V fwd = norm(sub(tgt, cam));
-    V right = norm(cross((V){0,1,0}, fwd));
-    V up = cross(fwd, right);
-    float asp = (float)scene->width / scene->height;
+typedef struct {
+    V cam, fwd, right, up;
+    float asp;
+    SphereData* spheres;
+    int num_spheres;
+    V light_pos;
+    int width, height;
+    Image* img;
+} RenderContext;
 
-    Image* img = create_image(scene->width, scene->height);
-    
-    for (int y = 0; y < scene->height; y++) {
-        for (int x = 0; x < scene->width; x++) {
+static void render_rows(RenderContext* ctx, int y_start, int y_end) {
+    for (int y = y_start; y < y_end; y++) {
+        for (int x = 0; x < ctx->width; x++) {
             V color_sum = {0, 0, 0};
             int sample_count = 0;
 
@@ -157,11 +149,11 @@ Image* render_frame(const Scene* scene) {
                 for (int sx = 0; sx < AA_SAMPLES; sx++) {
                     float sample_x = (float)(sx + 0.5f) / AA_SAMPLES;
                     float sample_y = (float)(sy + 0.5f) / AA_SAMPLES;
-                    float uv_x = (2.0f*(x + sample_x)/scene->width - 1.0f) * asp;
-                    float uv_y = 1.0f - 2.0f*(y + sample_y)/scene->height;
-                    V ray = norm(add(add(fwd, mul(right, uv_x)), mul(up, uv_y)));
+                    float uv_x = (2.0f*(x + sample_x)/ctx->width - 1.0f) * ctx->asp;
+                    float uv_y = 1.0f - 2.0f*(y + sample_y)/ctx->height;
+                    V ray = norm(add(add(ctx->fwd, mul(ctx->right, uv_x)), mul(ctx->up, uv_y)));
 
-                    V color = trace_ray(cam, ray, 0, spheres, scene->num_spheres, light_pos);
+                    V color = trace_ray(ctx->cam, ray, 0, ctx->spheres, ctx->num_spheres, ctx->light_pos);
                     color_sum = add(color_sum, color);
                     sample_count++;
                 }
@@ -169,13 +161,62 @@ Image* render_frame(const Scene* scene) {
 
             V color_avg = mul(color_sum, 1.0f/sample_count);
 
-            size_t idx = (y * scene->width + x) * 3;
-            img->data[idx]   = (uint8_t)(fminf(fmaxf(color_avg.x, 0.0f), 1.0f) * 255.0f);
-            img->data[idx+1] = (uint8_t)(fminf(fmaxf(color_avg.y, 0.0f), 1.0f) * 255.0f);
-            img->data[idx+2] = (uint8_t)(fminf(fmaxf(color_avg.z, 0.0f), 1.0f) * 255.0f);
+            size_t idx = (y * ctx->width + x) * 3;
+            ctx->img->data[idx]   = (uint8_t)(fminf(fmaxf(color_avg.x, 0.0f), 1.0f) * 255.0f);
+            ctx->img->data[idx+1] = (uint8_t)(fminf(fmaxf(color_avg.y, 0.0f), 1.0f) * 255.0f);
+            ctx->img->data[idx+2] = (uint8_t)(fminf(fmaxf(color_avg.z, 0.0f), 1.0f) * 255.0f);
         }
     }
-    
-    free(spheres);
-    return img;
+}
+
+static RenderContext setup_context(const Scene* scene) {
+    RenderContext ctx;
+    ctx.cam = (V){scene->camera_pos.x, scene->camera_pos.y, scene->camera_pos.z};
+    V tgt = (V){scene->camera_target.x, scene->camera_target.y, scene->camera_target.z};
+    ctx.light_pos = (V){scene->light_pos.x, scene->light_pos.y, scene->light_pos.z};
+
+    ctx.spheres = (SphereData*)malloc(scene->num_spheres * sizeof(SphereData));
+    ctx.num_spheres = scene->num_spheres;
+    for (int i = 0; i < scene->num_spheres; i++) {
+        ctx.spheres[i].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
+        ctx.spheres[i].r = scene->spheres[i].radius;
+        ctx.spheres[i].ref = scene->spheres[i].reflectivity;
+        ctx.spheres[i].col = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
+        const char* mat = scene->spheres[i].material[0] ? scene->spheres[i].material : "glass";
+        ctx.spheres[i].mat_type = (strcmp(mat, "plastic") == 0) ? 1 : 0;
+    }
+
+    ctx.fwd = norm(sub(tgt, ctx.cam));
+    ctx.right = norm(cross((V){0,1,0}, ctx.fwd));
+    ctx.up = cross(ctx.fwd, ctx.right);
+    ctx.asp = (float)scene->width / scene->height;
+    ctx.width = scene->width;
+    ctx.height = scene->height;
+    ctx.img = create_image(scene->width, scene->height);
+    return ctx;
+}
+
+Image* render_frame(const Scene* scene) {
+    RenderContext ctx = setup_context(scene);
+    render_rows(&ctx, 0, ctx.height);
+    free(ctx.spheres);
+    return ctx.img;
+}
+
+Image* render_frame_parallel(const Scene* scene, int num_threads) {
+    RenderContext ctx = setup_context(scene);
+    if (num_threads < 1) num_threads = 1;
+    if (num_threads > ctx.height) num_threads = ctx.height;
+
+    std::vector<std::thread> threads;
+    int rows_per = ctx.height / num_threads;
+    for (int t = 0; t < num_threads; t++) {
+        int y0 = t * rows_per;
+        int y1 = (t == num_threads - 1) ? ctx.height : y0 + rows_per;
+        threads.emplace_back(render_rows, &ctx, y0, y1);
+    }
+    for (auto& th : threads) th.join();
+
+    free(ctx.spheres);
+    return ctx.img;
 }
