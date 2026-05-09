@@ -32,8 +32,8 @@ static unsigned long crc32_buf(const unsigned char* buf, size_t len) {
 }
 
 static void write_png_chunk(FILE* f, const char* type, const unsigned char* data, size_t len) {
-    unsigned long crc = crc32_buf((const unsigned char*)type, 4);
-    crc = crc32(crc, data, len);
+    unsigned long crc_val = crc32_buf((const unsigned char*)type, 4);
+    crc_val = crc32(crc_val, data ? data : (const unsigned char*)"", len);
     
     unsigned char len_buf[4];
     len_buf[0] = (len >> 24) & 0xff;
@@ -41,10 +41,16 @@ static void write_png_chunk(FILE* f, const char* type, const unsigned char* data
     len_buf[2] = (len >> 8) & 0xff;
     len_buf[3] = len & 0xff;
     
+    unsigned char crc_buf[4];
+    crc_buf[0] = (crc_val >> 24) & 0xff;
+    crc_buf[1] = (crc_val >> 16) & 0xff;
+    crc_buf[2] = (crc_val >> 8) & 0xff;
+    crc_buf[3] = crc_val & 0xff;
+    
     fwrite(len_buf, 1, 4, f);
     fwrite(type, 1, 4, f);
     fwrite(data, 1, len, f);
-    fwrite(&crc, 1, 4, f);
+    fwrite(crc_buf, 1, 4, f);
 }
 
 int write_png(const Image* img, const char* filename) {
