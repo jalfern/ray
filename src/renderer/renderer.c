@@ -112,12 +112,16 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres, V 
         
     } else if (hf) {
         V p = add(o, mul(d, t_f));
+        V n = (V){0, 1, 0};
+        V to_light = sub(light_pos, p);
+        V light_dir = norm(to_light);
         int shadowed = in_shadow(p, light_pos, spheres, num_spheres, -1);
         V base = floor_color(p);
+        float diff = fmaxf(0.0f, dot(n, light_dir));
         float light_factor = shadowed ? 0.2f : 1.0f;
-        color = mul(base, light_factor);
+        color = add(mul(base, 0.15f), mul(base, diff * light_factor));
     } else {
-        color = (V){0.05f, 0.05f, 0.1f};
+        color = (V){0.1f, 0.1f, 0.2f};
     }
 
     return color;
