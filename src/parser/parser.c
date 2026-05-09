@@ -145,7 +145,7 @@ Scene* parse_scene(const char* filename) {
     while (*p && *p != '}') {
         char key[64];
         p = parse_string(p, key, sizeof(key));
-        if (!key[0]) break;
+        if (!p) break;
         
         p = skip_ws(p);
         if (*p != ':') break;
@@ -163,7 +163,7 @@ Scene* parse_scene(const char* filename) {
             while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
-                if (!ckey[0]) break;
+                if (!p) break;
                 p = skip_ws(p);
                 if (*p != ':') break;
                 p++;
@@ -185,7 +185,7 @@ Scene* parse_scene(const char* filename) {
             while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
-                if (!ckey[0]) break;
+                if (!p) break;
                 p = skip_ws(p);
                 if (*p != ':') break;
                 p++;
@@ -202,12 +202,13 @@ Scene* parse_scene(const char* filename) {
             if (*p == '}') p++;
         } else if (strcmp(key, "spheres") == 0) {
             p = parse_spheres_array(p, scene);
+            if (!p) break;
         } else if (strcmp(key, "floor") == 0) {
             if (*p == '{') p++;
             while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
-                if (!ckey[0]) break;
+                if (!p) break;
                 p = skip_ws(p);
                 if (*p != ':') break;
                 p++;

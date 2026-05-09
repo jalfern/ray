@@ -21,9 +21,5 @@ MaterialProps get_material_props(const char* material_name) {
 V floor_color(V p) {
     int ix = (int)floorf(p.x);
     int iz = (int)floorf(p.z);
-    int sum = ix + iz;
-    int shade = sum % 3;
-    if (shade == 0) return (V){0.08f, 0.12f, 0.25f};
-    else if (shade == 1) return (V){0.25f, 0.4f, 0.7f};
-    else return (V){0.5f, 0.65f, 0.95f};
+    return ((ix + iz) & 1) ? (V){0.08f, 0.12f, 0.25f} : (V){0.25f, 0.4f, 0.7f};
 }
