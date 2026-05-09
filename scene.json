@@ -1,11 +1,13 @@
 {
   "camera": {"pos": [0, 10, 20], "target": [0, 0, 0]},
   "spheres": [
-    {"pos": [-3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
-    {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
-    {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
-    {"pos": [0, 7, 0], "radius": 4, "reflectivity": 0.7, "color": [1.0, 1.0, 1.0], "material": "glass"},
+    {"pos": [-3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.3, "ior": 1.5, "color": [1.0, 1.0, 1.0], "material": "glass"},
+    {"pos": [3.5, 2.5, 2.5], "radius": 4, "reflectivity": 0.3, "ior": 1.5, "color": [0.8, 0.9, 1.0], "material": "glass"},
+    {"pos": [0, 2.5, -3], "radius": 4, "reflectivity": 0.3, "ior": 1.5, "color": [1.0, 1.0, 1.0], "material": "glass"},
     {"pos": [0, 15, 2], "radius": 3, "reflectivity": 0.1, "color": [1.0, 0.2, 0.2], "material": "plastic"}
+  ],
+  "meshes": [
+    {"file": "models/cube.obj", "pos": [0, 3, 0], "scale": 1.5, "reflectivity": 0.7, "color": [0.6, 0.2, 0.2], "material": "glass"}
   ],
   "light": {"pos": [5, 15, 5]},
   "floor": {"checkerboard": true},

@@ -8,6 +8,7 @@ BUILD_DIR = build
 SOURCES = $(SRC_DIR)/main.cc \
           $(SRC_DIR)/vector/vector.cc \
           $(SRC_DIR)/parser/parser.cc \
+          $(SRC_DIR)/parser/obj_parser.cc \
           $(SRC_DIR)/renderer/renderer.cc \
           $(SRC_DIR)/output/output.cc \
           $(SRC_DIR)/shading/shading.cc

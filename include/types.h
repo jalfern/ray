@@ -3,14 +3,26 @@
 
 #include "vector.h"
 #include "scene.h"
+#include "mesh.h"
 
-// Internal renderer types (not exposed in public API)
 typedef struct {
-    V c;          // center
-    float r;      // radius
-    float ref;    // reflectivity
-    V col;        // color
-    int mat_type; // 0=glass (reflective), 1=plastic (matte)
+    V c;
+    float r;
+    float ref;
+    float ior;
+    V col;
+    int mat_type;
 } SphereData;
+
+typedef struct {
+    TriGpu* tris;
+    int num_tris;
+    V col;
+    float ref;
+    float ior;
+    int mat_type;
+    V pos;
+    float scale;
+} MeshObjData;
 
 #endif

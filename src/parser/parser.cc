@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "obj_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +68,7 @@ static char* parse_sphere(char* p, Sphere* s) {
     p++;
     
     s->color = (Vec3){1.0f, 1.0f, 1.0f};
+    s->ior = 1.5f;
     strcpy(s->material, "glass");
     
     while (*p && *p != '}') {
@@ -84,6 +86,8 @@ static char* parse_sphere(char* p, Sphere* s) {
             p = parse_float(p, &s->radius);
         } else if (strcmp(key, "reflectivity") == 0) {
             p = parse_float(p, &s->reflectivity);
+        } else if (strcmp(key, "ior") == 0) {
+            p = parse_float(p, &s->ior);
         } else if (strcmp(key, "color") == 0) {
             p = parse_vec3(p, &s->color);
         } else if (strcmp(key, "material") == 0) {
@@ -118,9 +122,109 @@ static char* parse_spheres_array(char* p, Scene* scene) {
     return p;
 }
 
+static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
+    p = skip_ws(p);
+    if (*p != '{') return NULL;
+    p++;
+
+    m->color = (Vec3){1.0f, 1.0f, 1.0f};
+    m->reflectivity = 0.3f;
+    m->ior = 1.5f;
+    m->scale = 1.0f;
+    m->pos = (Vec3){0, 0, 0};
+    m->tris = NULL;
+    m->num_tris = 0;
+    strcpy(m->material, "glass");
+
+    char file_path[256] = {0};
+
+    while (*p && *p != '}') {
+        char key[64];
+        p = parse_string(p, key, sizeof(key));
+        if (!p) return NULL;
+        p = skip_ws(p);
+        if (*p != ':') return NULL;
+        p++;
+        p = skip_ws(p);
+
+        if (strcmp(key, "file") == 0) {
+            char fname[256];
+            p = parse_string(p, fname, sizeof(fname));
+            if (!p) return NULL;
+            if (fname[0] && fname[0] != '/') {
+                snprintf(file_path, sizeof(file_path), "%s/%s", scene_dir, fname);
+            } else {
+                strncpy(file_path, fname, sizeof(file_path) - 1);
+            }
+        } else if (strcmp(key, "pos") == 0) {
+            p = parse_vec3(p, &m->pos);
+        } else if (strcmp(key, "scale") == 0) {
+            p = parse_float(p, &m->scale);
+        } else if (strcmp(key, "reflectivity") == 0) {
+            p = parse_float(p, &m->reflectivity);
+        } else if (strcmp(key, "ior") == 0) {
+            p = parse_float(p, &m->ior);
+        } else if (strcmp(key, "color") == 0) {
+            p = parse_vec3(p, &m->color);
+        } else if (strcmp(key, "material") == 0) {
+            p = parse_string(p, m->material, sizeof(m->material));
+        } else {
+            while (*p && *p != ',' && *p != '}') p++;
+        }
+        p = skip_ws(p);
+        if (*p == ',') p++;
+    }
+    if (*p == '}') p++;
+
+    if (file_path[0]) {
+        load_obj(file_path, &m->tris, &m->num_tris);
+        // Apply transform (pos + scale) to all vertices
+        for (int i = 0; i < m->num_tris; i++) {
+            for (int k = 0; k < 3; k++) {
+                m->tris[i].v0[k] = m->tris[i].v0[k] * m->scale + (&m->pos.x)[k];
+                m->tris[i].v1[k] = m->tris[i].v1[k] * m->scale + (&m->pos.x)[k];
+                m->tris[i].v2[k] = m->tris[i].v2[k] * m->scale + (&m->pos.x)[k];
+            }
+        }
+    }
+
+    return p;
+}
+
+static char* parse_meshes_array(char* p, Scene* scene, const char* scene_dir) {
+    p = skip_ws(p);
+    if (*p != '[') return NULL;
+    p++;
+
+    scene->num_meshes = 0;
+    scene->meshes = NULL;
+
+    while (*p && *p != ']') {
+        scene->num_meshes++;
+        scene->meshes = (MeshObj*)realloc(scene->meshes, scene->num_meshes * sizeof(MeshObj));
+        p = parse_mesh(p, &scene->meshes[scene->num_meshes - 1], scene_dir);
+        if (!p) return NULL;
+        p = skip_ws(p);
+        if (*p == ',') p++;
+    }
+    if (*p == ']') p++;
+    return p;
+}
+
+static void get_scene_dir(const char* filename, char* dir, int max_len) {
+    strncpy(dir, filename, max_len - 1);
+    dir[max_len - 1] = '\0';
+    char* last = strrchr(dir, '/');
+    if (last) *last = '\0';
+    else dir[0] = '.';
+}
+
 Scene* parse_scene(const char* filename) {
     FILE* f = fopen(filename, "r");
     if (!f) return NULL;
+
+    char scene_dir[256];
+    get_scene_dir(filename, scene_dir, sizeof(scene_dir));
     
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
@@ -141,6 +245,8 @@ Scene* parse_scene(const char* filename) {
     scene->has_floor = 0;
     scene->num_spheres = 0;
     scene->spheres = NULL;
+    scene->num_meshes = 0;
+    scene->meshes = NULL;
     
     while (*p && *p != '}') {
         char key[64];
@@ -202,6 +308,9 @@ Scene* parse_scene(const char* filename) {
             if (*p == '}') p++;
         } else if (strcmp(key, "spheres") == 0) {
             p = parse_spheres_array(p, scene);
+            if (!p) break;
+        } else if (strcmp(key, "meshes") == 0) {
+            p = parse_meshes_array(p, scene, scene_dir);
             if (!p) break;
         } else if (strcmp(key, "animation") == 0) {
             scene->has_animation = 1;
@@ -286,6 +395,9 @@ Scene* parse_scene(const char* filename) {
 void free_scene(Scene* scene) {
     if (scene) {
         free(scene->spheres);
+        for (int i = 0; i < scene->num_meshes; i++)
+            free(scene->meshes[i].tris);
+        free(scene->meshes);
         free(scene);
     }
 }
