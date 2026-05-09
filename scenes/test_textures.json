@@ -1,0 +1,15 @@
+{
+  "camera": {"pos": [0, 5, 18], "target": [0, 2, 0]},
+  "spheres": [
+    {"pos": [-7, 2.5, 0], "radius": 2.5, "color": [1.0, 0.3, 0.3], "material": "plastic", "texture": {"type": "checker", "scale": 2.0, "color2": [0.9, 0.9, 0.9]}},
+    {"pos": [0, 2.5, 0], "radius": 2.5, "color": [0.8, 0.2, 0.8], "material": "plastic", "texture": {"type": "polka", "scale": 1.5, "color2": [0.9, 0.9, 0.9]}},
+    {"pos": [7, 2.5, 0], "radius": 2.5, "color": [0.1, 0.6, 0.3], "material": "plastic", "texture": {"type": "marble", "scale": 1.0, "color2": [1.0, 1.0, 1.0]}},
+    {"pos": [-3.5, 2, -7], "radius": 2, "color": [0.6, 0.4, 0.1], "material": "plastic", "texture": {"type": "rings", "scale": 1.5, "color2": [0.9, 0.7, 0.3]}},
+    {"pos": [3.5, 2, -7], "radius": 2, "color": [0.2, 0.5, 1.0], "material": "metallic", "texture": {"type": "checker", "scale": 1.5, "color2": [0.9, 0.9, 1.0]}}
+  ],
+  "lights": [{"pos": [0, 10, 0], "size": 4}],
+  "floor": {"checkerboard": true},
+  "output": "images/test_textures.png",
+  "width": 800,
+  "height": 600
+}

@@ -1,0 +1,14 @@
+{
+  "camera": {"pos": [7, 5, 9], "target": [0, 1.8, 0]},
+  "spheres": [
+    {"pos": [-3, 1.5, 4], "radius": 2, "reflectivity": 0.1, "color": [1.0, 0.7, 0.2], "material": "plastic"}
+  ],
+  "meshes": [
+    {"file": "../models/vase.obj", "pos": [0, 0, 0], "scale": 1, "reflectivity": 0.2, "ior": 1.5, "color": [0.7, 0.3, 0.8], "material": "glass", "texture": {"type": "rings", "scale": 2.0, "color2": [0.2, 0.8, 0.4]}}
+  ],
+  "lights": [{"pos": [6, 10, 6], "size": 0}],
+  "floor": {"checkerboard": true},
+  "output": "images/output_vase.png",
+  "width": 800,
+  "height": 600
+}

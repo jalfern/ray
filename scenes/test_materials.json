@@ -1,0 +1,14 @@
+{
+  "camera": {"pos": [0, 5, 16], "target": [0, 2, 0]},
+  "spheres": [
+    {"pos": [-6, 2, 0], "radius": 2.5, "reflectivity": 0.1, "color": [1.0, 0.2, 0.1], "material": "emissive"},
+    {"pos": [6, 2, 0], "radius": 2.5, "reflectivity": 0.9, "ior": 0.5, "color": [1.0, 0.8, 0.3], "material": "metallic"},
+    {"pos": [0, 2, 5], "radius": 2.5, "reflectivity": 0.1, "color": [0.6, 0.9, 1.0], "material": "subsurface"},
+    {"pos": [0, 2, -5], "radius": 2.5, "reflectivity": 0.1, "color": [0.2, 1.0, 0.4], "material": "plastic"}
+  ],
+  "lights": [{"pos": [0, 8, 0], "size": 3}],
+  "floor": {"checkerboard": true},
+  "output": "images/test_materials.png",
+  "width": 800,
+  "height": 600
+}

@@ -1,0 +1,20 @@
+{
+  "camera": {"pos": [8, 6, 10], "target": [0, 1.5, 0]},
+  "spheres": [
+    {"pos": [-4, 3, 4], "radius": 2.5, "reflectivity": 0.1, "color": [0.2, 0.6, 1.0], "material": "plastic"},
+    {"pos": [5, 2, -3], "radius": 2, "reflectivity": 0.3, "ior": 1.5, "color": [1.0, 0.8, 0.6], "material": "glass"}
+  ],
+  "meshes": [
+    {"file": "../models/torus.obj", "pos": [0, 2, 0], "scale": 1, "reflectivity": 0.2, "ior": 1.5, "color": [1.0, 1.0, 1.0], "material": "glass", "texture": {"type": "checker", "scale": 4.0, "color2": [0.2, 0.2, 0.8]}}
+  ],
+  "lights": [{"pos": [8, 12, 5], "size": 0}],
+  "animation": {
+    "duration": 5,
+    "fps": 30,
+    "orbit": {"center": [0, 1.5, 0], "radius": 12, "height": 6}
+  },
+  "floor": {"checkerboard": true},
+  "output": "videos/torus.mp4",
+  "width": 800,
+  "height": 600
+}

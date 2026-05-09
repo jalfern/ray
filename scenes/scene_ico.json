@@ -1,0 +1,15 @@
+{
+  "camera": {"pos": [6, 5, 8], "target": [0, 1.5, 0]},
+  "spheres": [
+    {"pos": [-3.5, 1.5, 3], "radius": 2, "reflectivity": 0.1, "color": [1.0, 0.3, 0.3], "material": "plastic"},
+    {"pos": [4, 2, -3], "radius": 2, "reflectivity": 0.3, "ior": 1.5, "color": [0.3, 1.0, 0.5], "material": "plastic"}
+  ],
+  "meshes": [
+    {"file": "../models/ico.obj", "pos": [0, 1.8, 0], "scale": 1, "reflectivity": 0.3, "ior": 1.7, "color": [0.9, 0.9, 1.0], "material": "glass", "texture": {"type": "marble", "scale": 1.5, "color2": [0.8, 0.2, 0.2]}}
+  ],
+  "lights": [{"pos": [5, 10, 8], "size": 0}],
+  "floor": {"checkerboard": true},
+  "output": "images/output_ico.png",
+  "width": 800,
+  "height": 600
+}

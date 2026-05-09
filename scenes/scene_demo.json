@@ -1,0 +1,20 @@
+{
+  "camera": {"pos": [8, 5, 10], "target": [0, 1.5, 0], "aperture": 0.3, "focus_dist": 11},
+  "spheres": [
+    {"pos": [-4, 2, 4], "radius": 2.5, "reflectivity": 0.2, "color": [0.2, 0.6, 1.0], "material": "plastic"},
+    {"pos": [5, 2, -3], "radius": 2, "reflectivity": 0.3, "ior": 1.5, "color": [1.0, 0.8, 0.6], "material": "glass"}
+  ],
+  "meshes": [
+    {"file": "../models/torus.obj", "pos": [0, 2, 0], "scale": 1, "reflectivity": 0.2, "ior": 1.5, "color": [1.0, 1.0, 1.0], "material": "glass"},
+    {"file": "../models/vase.obj", "pos": [-4, 0, -3], "scale": 0.8, "reflectivity": 0.1, "color": [0.7, 0.3, 0.8], "material": "plastic"},
+    {"file": "../models/ico.obj", "pos": [4, 1.8, 2], "scale": 0.8, "reflectivity": 0.2, "color": [0.2, 1.0, 0.4], "material": "plastic"}
+  ],
+  "lights": [
+    {"pos": [8, 10, 5], "size": 3},
+    {"pos": [-6, 8, 6], "size": 2}
+  ],
+  "floor": {"checkerboard": true},
+  "output": "images/output_demo.png",
+  "width": 800,
+  "height": 600
+}

@@ -1,0 +1,11 @@
+{
+  "camera": {"pos": [5, 4, 7], "target": [0, 1.5, 0]},
+  "meshes": [
+    {"file": "../models/happy.obj", "pos": [0, 1.5, 0], "scale": 14, "color": [0.9, 0.7, 0.3], "material": "metallic"}
+  ],
+  "lights": [{"pos": [5, 8, 5], "size": 3}],
+  "floor": {"checkerboard": true},
+  "output": "images/test_happy.png",
+  "width": 800,
+  "height": 600
+}

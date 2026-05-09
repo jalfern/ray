@@ -4,12 +4,15 @@ LDFLAGS = -lm -lz -framework Metal -framework Foundation
 
 SRC_DIR = src
 BUILD_DIR = build
+TOOLS_DIR = tools
+TOOLS_BUILD = $(BUILD_DIR)/tools
 
 SOURCES = $(SRC_DIR)/main.cc \
           $(SRC_DIR)/vector/vector.cc \
           $(SRC_DIR)/parser/parser.cc \
           $(SRC_DIR)/parser/obj_parser.cc \
           $(SRC_DIR)/renderer/renderer.cc \
+          $(SRC_DIR)/renderer/bvh.cc \
           $(SRC_DIR)/output/output.cc \
           $(SRC_DIR)/shading/shading.cc
 
@@ -39,7 +42,40 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TOOLS_BUILD)
+
+models: $(TOOLS_BUILD)/gen_torus $(TOOLS_BUILD)/gen_ico $(TOOLS_BUILD)/gen_vase
+	$(TOOLS_BUILD)/gen_torus 3 1 32 20 > models/torus.obj
+	$(TOOLS_BUILD)/gen_ico 2.5 > models/ico.obj
+	$(TOOLS_BUILD)/gen_vase 32 > models/vase.obj
+
+$(TOOLS_BUILD)/gen_torus: $(TOOLS_DIR)/gen_torus.c
+	mkdir -p $(TOOLS_BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ -lm
+
+$(TOOLS_BUILD)/gen_ico: $(TOOLS_DIR)/gen_ico.c
+	mkdir -p $(TOOLS_BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ -lm
+
+$(TOOLS_BUILD)/gen_vase: $(TOOLS_DIR)/gen_vase.c
+	mkdir -p $(TOOLS_BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ -lm
+
+test: $(TARGET)
+	@echo "Rendering torus..."
+	@./$(TARGET) scenes/scene_torus.json > /dev/null
+	@echo "Rendering ico..."
+	@./$(TARGET) scenes/scene_ico.json > /dev/null
+	@echo "Rendering vase..."
+	@./$(TARGET) scenes/scene_vase.json > /dev/null
+	@echo "Rendering demo..."
+	@./$(TARGET) scenes/scene_demo.json > /dev/null
+	@echo "Rendering emissive demo..."
+	@./$(TARGET) scenes/scene_emissive_demo.json > /dev/null
+	@echo "Rendering complex (65K tri torus)..."
+	@./$(TARGET) scenes/scene_complex.json > /dev/null
+	@echo "All done:"
+	@ls -lh images/ videos/ 2>/dev/null
 
 run: $(TARGET)
-	./$(TARGET) scene.json
+	./$(TARGET) scenes/scene.json

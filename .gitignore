@@ -8,8 +8,15 @@ build/
 ray2
 
 # Output files
-output.ppm
-output.png
+*.ppm
+
+# Generated assets
+frames/
+images/
+videos/
+
+# macOS
+.DS_Store
 
 # IDE
 *.swp

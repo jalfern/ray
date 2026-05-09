@@ -97,7 +97,7 @@ static void render_animation(Scene* scene) {
 }
 
 int main(int argc, char** argv) {
-    const char* scene_file = "scene.json";
+    const char* scene_file = "scenes/scene.json";
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--cpu") == 0) use_gpu = 0;
         else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {

@@ -64,7 +64,7 @@ static ObjIdx parse_idx(const char** pp) {
         p++;
         if (*p != '/') o.vt = atoi(p) - 1;
         while (*p && *p != '/' && !isspace(*p)) p++;
-        if (*p == '/') { p++; o.vn = atoi(p) - 1; }
+        if (*p == '/') { p++; o.vn = atoi(p) - 1; while (*p && *p != '/' && !isspace(*p)) p++; }
     }
     *pp = p;
     return o;
@@ -121,6 +121,7 @@ int load_obj(const char* filename, TriGpu** out_tris, int* out_count) {
     for (int t = 0; t < nt; t++) {
         int i0 = idxs[t * 3].v, i1 = idxs[t * 3 + 1].v, i2 = idxs[t * 3 + 2].v;
         int n0 = idxs[t * 3].vn, n1 = idxs[t * 3 + 1].vn, n2 = idxs[t * 3 + 2].vn;
+        int t0 = idxs[t * 3].vt, t1 = idxs[t * 3 + 1].vt, t2 = idxs[t * 3 + 2].vt;
 
         tris[t].v0[0] = verts[i0].x; tris[t].v0[1] = verts[i0].y; tris[t].v0[2] = verts[i0].z;
         tris[t].v1[0] = verts[i1].x; tris[t].v1[1] = verts[i1].y; tris[t].v1[2] = verts[i1].z;
@@ -140,6 +141,16 @@ int load_obj(const char* filename, TriGpu** out_tris, int* out_count) {
             tris[t].n1[0] = nx; tris[t].n1[1] = ny; tris[t].n1[2] = nz;
             tris[t].n2[0] = nx; tris[t].n2[1] = ny; tris[t].n2[2] = nz;
         }
+
+        if (t0 >= 0 && t0 < num_texcs) {
+            tris[t].t0[0] = texcs[t0].x; tris[t].t0[1] = texcs[t0].y;
+        } else { tris[t].t0[0] = 0; tris[t].t0[1] = 0; }
+        if (t1 >= 0 && t1 < num_texcs) {
+            tris[t].t1[0] = texcs[t1].x; tris[t].t1[1] = texcs[t1].y;
+        } else { tris[t].t1[0] = 0; tris[t].t1[1] = 0; }
+        if (t2 >= 0 && t2 < num_texcs) {
+            tris[t].t2[0] = texcs[t2].x; tris[t].t2[1] = texcs[t2].y;
+        } else { tris[t].t2[0] = 0; tris[t].t2[1] = 0; }
 
         tris[t].mesh_idx = 0;
     }
