@@ -14,7 +14,9 @@ SOURCES = $(SRC_DIR)/main.cc \
           $(SRC_DIR)/renderer/renderer.cc \
           $(SRC_DIR)/renderer/bvh.cc \
           $(SRC_DIR)/output/output.cc \
-          $(SRC_DIR)/shading/shading.cc
+          $(SRC_DIR)/shading/shading.cc \
+          $(SRC_DIR)/denoiser/denoiser.cc \
+          $(SRC_DIR)/envmap/envmap.cc
 
 MM_SOURCES = $(SRC_DIR)/renderer/gpu_renderer.mm
 

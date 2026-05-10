@@ -1,6 +1,8 @@
 #include "renderer.h"
 #include "../vector/vector.h"
 #include "../shading/shading.h"
+#include "../denoiser/denoiser.h"
+#include "../envmap/envmap.h"
 #include "bvh.h"
 #include <math.h>
 #include <stdlib.h>
@@ -292,7 +294,8 @@ static float in_shadow(V p, LightData light, SphereData* spheres, int num_sphere
 static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                    MeshObjData* meshes, int num_meshes,
                    LightData* lights, int num_lights,
-                   EmissiveSurf* emissive, int num_emissive, int sample_idx) {
+                   EmissiveSurf* emissive, int num_emissive,
+                   int sample_idx, EnvMap* env) {
     if (depth > MAX_DEPTH) return (V){0,0,0};
 
     float ts, tf;
@@ -344,7 +347,11 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         hit_type = 3; t_hit = tf;
     }
 
-    if (hit_type == 0) return (V){0.1f, 0.1f, 0.2f};
+    if (hit_type == 0) {
+        float er, eg, eb;
+        envmap_sample(env, d.x, d.y, d.z, &er, &eg, &eb);
+        return (V){er, eg, eb};
+    }
 
     V p = add(o, mul(d, t_hit));
 
@@ -491,7 +498,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V refl_origin = add(p, mul(refl_dir, EPS));
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,
                            spheres, num_spheres, meshes, num_meshes,
-                           lights, num_lights, emissive, num_emissive, sample_idx);
+                           lights, num_lights, emissive, num_emissive,
+                           sample_idx, env);
 
     if (mat == MAT_METALLIC) return (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
 
@@ -510,7 +518,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         V refr_origin = add(p, mul(refr_dir, EPS));
         refr_col = trace_ray(refr_origin, refr_dir, depth + 1,
                              spheres, num_spheres, meshes, num_meshes,
-                             lights, num_lights, emissive, num_emissive, sample_idx);
+                             lights, num_lights, emissive, num_emissive,
+                             sample_idx, env);
         refr_col = (V){refr_col.x * sc.x, refr_col.y * sc.y, refr_col.z * sc.z};
     }
 
@@ -536,6 +545,7 @@ typedef struct {
     int num_emissive;
     float exposure;
     int width, height;
+    EnvMap* env;
     Image* img;
 } RenderContext;
 
@@ -567,7 +577,8 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                     V color = trace_ray(origin, ray_dir, 0, ctx->spheres, ctx->num_spheres,
                                         ctx->meshes, ctx->num_meshes,
                                         ctx->lights, ctx->num_lights,
-                                        ctx->emissive, ctx->num_emissive, sample_idx);
+                                        ctx->emissive, ctx->num_emissive,
+                                        sample_idx, ctx->env);
                     color_sum = add(color_sum, color);
                     sample_count++;
                 }
@@ -702,6 +713,7 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.exposure = scene->exposure;
     ctx.width = scene->width;
     ctx.height = scene->height;
+    ctx.env = envmap_load(scene->env_file, scene->env_intensity);
     ctx.img = create_image(scene->width, scene->height);
     return ctx;
 }
@@ -714,9 +726,18 @@ static void free_mesh_data(MeshObjData* meshes, int num_meshes) {
     }
 }
 
+static void apply_denoise(Image* img, const Scene* scene) {
+    if (!scene->denoise) return;
+    GBuffer* gbuf = trace_gbuffer(scene);
+    denoise(img, gbuf, scene->width, scene->height, scene->denoise_strength);
+    free_gbuffer(gbuf);
+}
+
 Image* render_frame(const Scene* scene) {
     RenderContext ctx = setup_context(scene);
     render_rows(&ctx, 0, ctx.height);
+    apply_denoise(ctx.img, scene);
+    envmap_free(ctx.env);
     free(ctx.spheres);
     free(ctx.lights);
     for (int i = 0; i < ctx.num_emissive; i++)
@@ -739,7 +760,8 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
         threads.emplace_back(render_rows, &ctx, y0, y1);
     }
     for (auto& th : threads) th.join();
-
+    apply_denoise(ctx.img, scene);
+    envmap_free(ctx.env);
     free(ctx.spheres);
     free(ctx.lights);
     for (int i = 0; i < ctx.num_emissive; i++)

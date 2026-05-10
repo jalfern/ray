@@ -350,6 +350,10 @@ Scene* parse_scene(const char* filename) {
     scene->width = 400;
     scene->height = 400;
     scene->exposure = 1.0f;
+    scene->denoise = 0;
+    scene->denoise_strength = 1.0f;
+    scene->env_file[0] = '\0';
+    scene->env_intensity = 1.0f;
     scene->has_floor = 0;
     scene->num_spheres = 0;
     scene->spheres = NULL;
@@ -372,6 +376,38 @@ Scene* parse_scene(const char* filename) {
             p = parse_int(p, &scene->height);
         } else if (strcmp(key, "exposure") == 0) {
             p = parse_float(p, &scene->exposure);
+        } else if (strcmp(key, "denoise") == 0) {
+            if (*p == 't' || *p == 'T' || *p == '1') {
+                scene->denoise = 1;
+                while (*p && !isspace(*p) && *p != ',' && *p != '}') p++;
+            } else if ((*p >= '0' && *p <= '9') || *p == '.' || *p == '-') {
+                p = parse_float(p, &scene->denoise_strength);
+                scene->denoise = scene->denoise_strength > 0;
+            } else {
+                while (*p && !isspace(*p) && *p != ',' && *p != '}') p++;
+            }
+        } else if (strcmp(key, "environment") == 0) {
+            if (*p == '{') p++;
+            while (*p && *p != '}') {
+                char ekey[64];
+                p = parse_string(p, ekey, sizeof(ekey));
+                if (!p) break;
+                p = skip_ws(p);
+                if (*p != ':') break;
+                p++;
+                p = skip_ws(p);
+
+                if (strcmp(ekey, "file") == 0) {
+                    p = parse_string(p, scene->env_file, sizeof(scene->env_file));
+                } else if (strcmp(ekey, "intensity") == 0) {
+                    p = parse_float(p, &scene->env_intensity);
+                } else {
+                    while (*p && *p != ',' && *p != '}') p++;
+                }
+                p = skip_ws(p);
+                if (*p == ',') p++;
+            }
+            if (*p == '}') p++;
         } else if (strcmp(key, "output") == 0) {
             p = parse_string(p, scene->output, sizeof(scene->output));
         } else if (strcmp(key, "camera") == 0) {

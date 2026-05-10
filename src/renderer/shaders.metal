@@ -52,6 +52,7 @@ struct SceneGpu {
     float exposure;
     int width;
     int height;
+    int has_env;
 };
 
 struct EmissiveGpu {
@@ -159,6 +160,25 @@ static bool bbox_hit(float3 o, float3 d, float3 bmin, float3 bmax) {
 
 static float3 floor_color(float3 p) {
     return ((int(p.x)+int(p.z)) & 1) ? float3(0.08f,0.12f,0.25f) : float3(0.25f,0.4f,0.7f);
+}
+
+static float3 sample_envmap(texture2d<float> env_tex, float3 d) {
+    float u = atan2(d.z, d.x) * (0.5f / M_PI_F) + 0.5f;
+    float v = acos(clamp(d.y, -1.0f, 1.0f)) * (1.0f / M_PI_F);
+    return env_tex.sample(sampler(filter::linear, address::repeat), float2(u, v)).rgb;
+}
+
+static float3 env_procedural(float3 d) {
+    float t = d.y * 0.5f + 0.5f;
+    float horizon = 0.5f + 0.5f * d.y;
+    float sky_r = 0.3f + 0.5f * horizon;
+    float sky_g = 0.4f + 0.6f * horizon;
+    float sky_b = 0.6f + 0.4f * horizon;
+    float sun = pow(max(d.y, 0.0f), 64.0f) * 4.0f;
+    float cloud = pow(max(0.2f + 0.8f * sin(d.x * 12.0f + d.z * 8.0f) * sin(d.z * 10.0f - d.x * 6.0f), 0.0f), 2.0f) * 0.3f;
+    float3 col = float3(sky_r + sun + cloud, sky_g + sun * 0.8f + cloud, sky_b + sun * 0.4f + cloud);
+    col *= 0.3f + 0.7f * max(d.y, 0.0f);
+    return col;
 }
 
 static float3 tone_map(float3 c, float exposure) {
@@ -410,7 +430,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         device const LightGpu* lights, int nl,
                         device const EmissiveGpu* emissive, int ne,
                         device const float* emissive_cdf, int ncdf,
-                        int sample_idx) {
+                        int sample_idx,
+                        texture2d<float> env_tex, int has_env) {
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
@@ -498,7 +519,11 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 hit_type = 3; t_hit = tf;
             }
 
-            if (hit_type == 0) { accum += float3(0.1f, 0.1f, 0.2f) * thru; break; }
+            if (hit_type == 0) {
+                float3 env_col = has_env ? sample_envmap(env_tex, rd) : env_procedural(rd);
+                accum += env_col * thru;
+                break;
+            }
 
             float3 p = ro + rd * t_hit;
 
@@ -690,6 +715,7 @@ kernel void rk(
     device const LightGpu* lights [[buffer(7)]],
     device const EmissiveGpu* emissive [[buffer(8)]],
     device const float* emissive_cdf [[buffer(9)]],
+    texture2d<float> env_tex [[texture(0)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -725,7 +751,8 @@ kernel void rk(
                              lights, scene.num_lights,
                              emissive, scene.num_emissive,
                              emissive_cdf, scene.num_emissive_cdf,
-                             sidx);
+                             sidx,
+                             env_tex, scene.has_env);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

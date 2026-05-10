@@ -60,6 +60,10 @@ typedef struct {
     int width;
     int height;
     float exposure;
+    int denoise;
+    float denoise_strength;
+    char env_file[256];
+    float env_intensity;
     int has_floor;
     char output[256];
     int has_animation;

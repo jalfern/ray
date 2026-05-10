@@ -1,5 +1,6 @@
 #include "gpu_renderer.h"
 #include "bvh.h"
+#include "../envmap/envmap.h"
 #include <string.h>
 #include <math.h>
 #import <Metal/Metal.h>
@@ -40,6 +41,7 @@ struct SceneGpu {
     float exposure;
     int width;
     int height;
+    int has_env;
 };
 
 struct MeshMat {
@@ -184,6 +186,7 @@ Image* render_frame_gpu(const Scene* scene) {
         sd.num_emissive_cdf = cdf_total;
         sd.exposure = scene->exposure;
         sd.width = w; sd.height = h;
+        sd.has_env = (scene->env_file[0] != 0) ? 1 : 0;
         id<MTLBuffer> scBuf = [device newBufferWithBytes:&sd length:sizeof(SceneGpu)
                                                   options:MTLResourceStorageModeShared];
 
@@ -305,6 +308,29 @@ Image* render_frame_gpu(const Scene* scene) {
             free(cdf_buf);
         }
 
+        id<MTLTexture> envTex = nil;
+        if (scene->env_file[0]) {
+            EnvMap* env = envmap_load(scene->env_file, scene->env_intensity);
+            if (env) {
+                MTLTextureDescriptor* td = [MTLTextureDescriptor
+                    texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                    width:env->w height:env->h mipmapped:NO];
+                envTex = [device newTextureWithDescriptor:td];
+                int n = env->w * env->h;
+                float* rgba = (float*)malloc(n * 4 * sizeof(float));
+                for (int i = 0; i < n; i++) {
+                    rgba[i*4]   = env->data[i*3];
+                    rgba[i*4+1] = env->data[i*3+1];
+                    rgba[i*4+2] = env->data[i*3+2];
+                    rgba[i*4+3] = 1.0f;
+                }
+                [envTex replaceRegion:MTLRegionMake2D(0, 0, env->w, env->h)
+                          mipmapLevel:0 withBytes:rgba bytesPerRow:env->w * 4 * sizeof(float)];
+                free(rgba);
+                envmap_free(env);
+            }
+        }
+
         id<MTLCommandBuffer> cmdBuf = [queue commandBuffer];
         id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
         [enc setComputePipelineState:pipeline];
@@ -318,6 +344,7 @@ Image* render_frame_gpu(const Scene* scene) {
         [enc setBuffer:lightBuf offset:0 atIndex:7];
         [enc setBuffer:emissiveBuf offset:0 atIndex:8];
         [enc setBuffer:emissiveCdfBuf offset:0 atIndex:9];
+        if (envTex) [enc setTexture:envTex atIndex:0];
 
         MTLSize gridSize = MTLSizeMake(w, h, 1);
         NSUInteger tg_w = MIN(16u, pipeline.threadExecutionWidth);
