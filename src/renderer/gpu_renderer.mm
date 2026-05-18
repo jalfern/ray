@@ -126,7 +126,6 @@ Image* render_frame_gpu(const Scene* scene) {
             }
 
             int max_nodes = 2 * total_mesh_tris;
-            if (max_nodes > BVH_MAX_NODES) max_nodes = BVH_MAX_NODES;
             BvhNode* bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
             num_bvh_nodes = bvh_build(bvh_nodes, tris, total_mesh_tris);
 

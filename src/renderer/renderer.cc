@@ -128,8 +128,6 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         float len = sqrtf(nx*nx + ny*ny + nz*nz);
         if (len > EPS) { nx /= len; ny /= len; nz /= len; }
         *hit_normal = (V){nx, ny, nz};
-        if (dot(*hit_normal, d) > 0)
-            *hit_normal = mul(*hit_normal, -1);
         out_uv[0] = w * best_tri->t0[0] + best_u * best_tri->t1[0] + best_v * best_tri->t2[0];
         out_uv[1] = w * best_tri->t0[1] + best_u * best_tri->t1[1] + best_v * best_tri->t2[1];
     }
@@ -602,39 +600,39 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.aperture = scene->aperture;
     ctx.focus_dist = scene->focus_dist > 0 ? scene->focus_dist : 1;
 
-    ctx.spheres = (SphereData*)malloc(scene->num_spheres * sizeof(SphereData));
+    std::vector<SphereData> spheres_vec(scene->num_spheres);
+    SphereData* spheres = spheres_vec.data();
     ctx.num_spheres = scene->num_spheres;
     for (int i = 0; i < scene->num_spheres; i++) {
-        ctx.spheres[i].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
-        ctx.spheres[i].r = scene->spheres[i].radius;
-        ctx.spheres[i].ref = scene->spheres[i].reflectivity;
-        ctx.spheres[i].ior = scene->spheres[i].ior;
-        ctx.spheres[i].col = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
+        spheres[i].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
+        spheres[i].r = scene->spheres[i].radius;
+        spheres[i].ref = scene->spheres[i].reflectivity;
+        spheres[i].ior = scene->spheres[i].ior;
+        spheres[i].col = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
         const char* mat = scene->spheres[i].material[0] ? scene->spheres[i].material : "glass";
-        ctx.spheres[i].mat_type = mat_name_to_type(mat);
-        ctx.spheres[i].tex.type = scene->spheres[i].tex_type;
-        ctx.spheres[i].tex.scale = scene->spheres[i].tex_scale;
-        ctx.spheres[i].tex.color2 = (V){scene->spheres[i].tex_color2.x, scene->spheres[i].tex_color2.y, scene->spheres[i].tex_color2.z};
+        spheres[i].mat_type = mat_name_to_type(mat);
+        spheres[i].tex.type = scene->spheres[i].tex_type;
+        spheres[i].tex.scale = scene->spheres[i].tex_scale;
+        spheres[i].tex.color2 = (V){scene->spheres[i].tex_color2.x, scene->spheres[i].tex_color2.y, scene->spheres[i].tex_color2.z};
     }
+    ctx.spheres = spheres;
 
-    ctx.meshes = NULL;
-    ctx.num_meshes = scene->num_meshes;
+    std::vector<MeshObjData> meshes_vec(ctx.num_meshes);
+    MeshObjData* meshes = meshes_vec.data();
     if (ctx.num_meshes > 0) {
-        ctx.meshes = (MeshObjData*)malloc(ctx.num_meshes * sizeof(MeshObjData));
         for (int i = 0; i < ctx.num_meshes; i++) {
-            ctx.meshes[i].tris = scene->meshes[i].tris;
-            ctx.meshes[i].num_tris = scene->meshes[i].num_tris;
-            ctx.meshes[i].col = (V){scene->meshes[i].color.x, scene->meshes[i].color.y, scene->meshes[i].color.z};
-            ctx.meshes[i].ref = scene->meshes[i].reflectivity;
-            ctx.meshes[i].ior = scene->meshes[i].ior;
+            meshes[i].tris = scene->meshes[i].tris;
+            meshes[i].num_tris = scene->meshes[i].num_tris;
+            meshes[i].col = (V){scene->meshes[i].color.x, scene->meshes[i].color.y, scene->meshes[i].color.z};
+            meshes[i].ref = scene->meshes[i].reflectivity;
+            meshes[i].ior = scene->meshes[i].ior;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
-            ctx.meshes[i].mat_type = mat_name_to_type(mat);
-            ctx.meshes[i].tex.type = scene->meshes[i].tex_type;
-            ctx.meshes[i].tex.scale = scene->meshes[i].tex_scale;
-            ctx.meshes[i].tex.color2 = (V){scene->meshes[i].tex_color2.x, scene->meshes[i].tex_color2.y, scene->meshes[i].tex_color2.z};
+            meshes[i].mat_type = mat_name_to_type(mat);
+            meshes[i].tex.type = scene->meshes[i].tex_type;
+            meshes[i].tex.scale = scene->meshes[i].tex_scale;
+            meshes[i].tex.color2 = (V){scene->meshes[i].tex_color2.x, scene->meshes[i].tex_color2.y, scene->meshes[i].tex_color2.z};
             if (scene->meshes[i].num_tris > 0) {
                 int max_nodes = 2 * scene->meshes[i].num_tris;
-                if (max_nodes > BVH_MAX_NODES) max_nodes = BVH_MAX_NODES;
                 ctx.meshes[i].bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
                 ctx.meshes[i].num_bvh_nodes = bvh_build(ctx.meshes[i].bvh_nodes,
                     ctx.meshes[i].tris, ctx.meshes[i].num_tris);
@@ -644,13 +642,16 @@ static RenderContext setup_context(const Scene* scene) {
             }
         }
     }
+    ctx.meshes = meshes;
 
-    ctx.lights = (LightData*)malloc(scene->num_lights * sizeof(LightData));
+    std::vector<LightData> lights_vec(scene->num_lights);
+    LightData* lights = lights_vec.data();
     ctx.num_lights = scene->num_lights;
     for (int i = 0; i < scene->num_lights; i++) {
-        ctx.lights[i].pos = (V){scene->lights[i].pos.x, scene->lights[i].pos.y, scene->lights[i].pos.z};
-        ctx.lights[i].size = scene->lights[i].size;
+        lights[i].pos = (V){scene->lights[i].pos.x, scene->lights[i].pos.y, scene->lights[i].pos.z};
+        lights[i].size = scene->lights[i].size;
     }
+    ctx.lights = lights;
 
     int em_count = 0;
     for (int i = 0; i < scene->num_spheres; i++)
@@ -660,35 +661,36 @@ static RenderContext setup_context(const Scene* scene) {
         if (mat_name_to_type(scene->meshes[i].material[0] ? scene->meshes[i].material : "glass") == MAT_EMISSIVE)
             em_count++;
     ctx.num_emissive = em_count;
-    ctx.emissive = NULL;
+    std::vector<EmissiveSurf> emissive_vec(em_count);
+    EmissiveSurf* emissive = emissive_vec.data();
+    ctx.num_emissive = em_count;
     if (em_count > 0) {
-        ctx.emissive = (EmissiveSurf*)malloc(em_count * sizeof(EmissiveSurf));
         int ei = 0;
         for (int i = 0; i < scene->num_spheres; i++) {
             if (mat_name_to_type(scene->spheres[i].material[0] ? scene->spheres[i].material : "glass") != MAT_EMISSIVE) continue;
-            ctx.emissive[ei].emitted = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
-            ctx.emissive[ei].type = 0;
-            ctx.emissive[ei].src_idx = i;
-            ctx.emissive[ei].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
-            ctx.emissive[ei].r = scene->spheres[i].radius;
-            ctx.emissive[ei].area = 4.0f * (float)M_PI * scene->spheres[i].radius * scene->spheres[i].radius;
-            ctx.emissive[ei].tris = NULL;
-            ctx.emissive[ei].num_tris = 0;
-            ctx.emissive[ei].tri_cdf = NULL;
-            ctx.emissive[ei].total_area = 0;
-            ctx.emissive[ei].bvh_nodes = NULL;
-            ctx.emissive[ei].num_bvh_nodes = 0;
+            emissive[ei].emitted = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
+            emissive[ei].type = 0;
+            emissive[ei].src_idx = i;
+            emissive[ei].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
+            emissive[ei].r = scene->spheres[i].radius;
+            emissive[ei].area = 4.0f * (float)M_PI * scene->spheres[i].radius * scene->spheres[i].radius;
+            emissive[ei].tris = NULL;
+            emissive[ei].num_tris = 0;
+            emissive[ei].tri_cdf = NULL;
+            emissive[ei].total_area = 0;
+            emissive[ei].bvh_nodes = NULL;
+            emissive[ei].num_bvh_nodes = 0;
             ei++;
         }
         for (int i = 0; i < scene->num_meshes; i++) {
             if (mat_name_to_type(scene->meshes[i].material[0] ? scene->meshes[i].material : "glass") != MAT_EMISSIVE) continue;
-            ctx.emissive[ei].emitted = (V){scene->meshes[i].color.x, scene->meshes[i].color.y, scene->meshes[i].color.z};
-            ctx.emissive[ei].type = 1;
-            ctx.emissive[ei].src_idx = i;
-            ctx.emissive[ei].c = (V){0,0,0};
-            ctx.emissive[ei].r = 0;
-            ctx.emissive[ei].tris = scene->meshes[i].tris;
-            ctx.emissive[ei].num_tris = scene->meshes[i].num_tris;
+            emissive[ei].emitted = (V){scene->meshes[i].color.x, scene->meshes[i].color.y, scene->meshes[i].color.z};
+            emissive[ei].type = 1;
+            emissive[ei].src_idx = i;
+            emissive[ei].c = (V){0,0,0};
+            emissive[ei].r = 0;
+            emissive[ei].tris = scene->meshes[i].tris;
+            emissive[ei].num_tris = scene->meshes[i].num_tris;
             float total = 0;
             float* cdf = (float*)malloc((scene->meshes[i].num_tris + 1) * sizeof(float));
             cdf[0] = 0;
@@ -697,14 +699,15 @@ static RenderContext setup_context(const Scene* scene) {
                 total += ta;
                 cdf[j + 1] = total;
             }
-            ctx.emissive[ei].tri_cdf = cdf;
-            ctx.emissive[ei].total_area = total;
-            ctx.emissive[ei].area = total;
-            ctx.emissive[ei].bvh_nodes = NULL;
-            ctx.emissive[ei].num_bvh_nodes = 0;
+            emissive[ei].tri_cdf = cdf;
+            emissive[ei].total_area = total;
+            emissive[ei].area = total;
+            emissive[ei].bvh_nodes = NULL;
+            emissive[ei].num_bvh_nodes = 0;
             ei++;
         }
     }
+    ctx.emissive = emissive;
 
     ctx.fwd = norm(sub(tgt, ctx.cam));
     ctx.right = norm(cross((V){0,1,0}, ctx.fwd));
@@ -738,11 +741,6 @@ Image* render_frame(const Scene* scene) {
     render_rows(&ctx, 0, ctx.height);
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
-    free(ctx.spheres);
-    free(ctx.lights);
-    for (int i = 0; i < ctx.num_emissive; i++)
-        free(ctx.emissive[i].tri_cdf);
-    free(ctx.emissive);
     free_mesh_data(ctx.meshes, ctx.num_meshes);
     return ctx.img;
 }
@@ -762,11 +760,6 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
     for (auto& th : threads) th.join();
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
-    free(ctx.spheres);
-    free(ctx.lights);
-    for (int i = 0; i < ctx.num_emissive; i++)
-        free(ctx.emissive[i].tri_cdf);
-    free(ctx.emissive);
     free_mesh_data(ctx.meshes, ctx.num_meshes);
     return ctx.img;
 }

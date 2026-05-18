@@ -511,10 +511,9 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     sior = mats[mesh_idx].ior;
                     smat = mats[mesh_idx].mat_type;
                 }
-                hit_n = tri_normal(tris[mi].v0, tris[mi].v1, tris[mi].v2,
-                                   tris[mi].n0, tris[mi].n1, tris[mi].n2, mu, mv);
-                if (dot(hit_n, rd) > 0) hit_n = -hit_n;
-                mesh_uv = (1.0f - mu - mv) * tris[mi].t0 + mu * tris[mi].t1 + mv * tris[mi].t2;
+                 hit_n = tri_normal(tris[mi].v0, tris[mi].v1, tris[mi].v2,
+                                    tris[mi].n0, tris[mi].n1, tris[mi].n2, mu, mv);
+                 mesh_uv = (1.0f - mu - mv) * tris[mi].t0 + mu * tris[mi].t1 + mv * tris[mi].t2;
             } else if (hf0) {
                 hit_type = 3; t_hit = tf;
             }
