@@ -600,8 +600,7 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.aperture = scene->aperture;
     ctx.focus_dist = scene->focus_dist > 0 ? scene->focus_dist : 1;
 
-    std::vector<SphereData> spheres_vec(scene->num_spheres);
-    SphereData* spheres = spheres_vec.data();
+    SphereData* spheres = (SphereData*)calloc(scene->num_spheres > 0 ? scene->num_spheres : 1, sizeof(SphereData));
     ctx.num_spheres = scene->num_spheres;
     for (int i = 0; i < scene->num_spheres; i++) {
         spheres[i].c = (V){scene->spheres[i].pos.x, scene->spheres[i].pos.y, scene->spheres[i].pos.z};
@@ -617,8 +616,8 @@ static RenderContext setup_context(const Scene* scene) {
     }
     ctx.spheres = spheres;
 
-    std::vector<MeshObjData> meshes_vec(ctx.num_meshes);
-    MeshObjData* meshes = meshes_vec.data();
+    ctx.num_meshes = scene->num_meshes;
+    MeshObjData* meshes = (MeshObjData*)calloc(ctx.num_meshes > 0 ? ctx.num_meshes : 1, sizeof(MeshObjData));
     if (ctx.num_meshes > 0) {
         for (int i = 0; i < ctx.num_meshes; i++) {
             meshes[i].tris = scene->meshes[i].tris;
@@ -633,19 +632,18 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].tex.color2 = (V){scene->meshes[i].tex_color2.x, scene->meshes[i].tex_color2.y, scene->meshes[i].tex_color2.z};
             if (scene->meshes[i].num_tris > 0) {
                 int max_nodes = 2 * scene->meshes[i].num_tris;
-                ctx.meshes[i].bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
-                ctx.meshes[i].num_bvh_nodes = bvh_build(ctx.meshes[i].bvh_nodes,
-                    ctx.meshes[i].tris, ctx.meshes[i].num_tris);
+                meshes[i].bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
+                meshes[i].num_bvh_nodes = bvh_build(meshes[i].bvh_nodes,
+                    meshes[i].tris, meshes[i].num_tris);
             } else {
-                ctx.meshes[i].bvh_nodes = NULL;
-                ctx.meshes[i].num_bvh_nodes = 0;
+                meshes[i].bvh_nodes = NULL;
+                meshes[i].num_bvh_nodes = 0;
             }
         }
     }
     ctx.meshes = meshes;
 
-    std::vector<LightData> lights_vec(scene->num_lights);
-    LightData* lights = lights_vec.data();
+    LightData* lights = (LightData*)calloc(scene->num_lights > 0 ? scene->num_lights : 1, sizeof(LightData));
     ctx.num_lights = scene->num_lights;
     for (int i = 0; i < scene->num_lights; i++) {
         lights[i].pos = (V){scene->lights[i].pos.x, scene->lights[i].pos.y, scene->lights[i].pos.z};
@@ -661,8 +659,7 @@ static RenderContext setup_context(const Scene* scene) {
         if (mat_name_to_type(scene->meshes[i].material[0] ? scene->meshes[i].material : "glass") == MAT_EMISSIVE)
             em_count++;
     ctx.num_emissive = em_count;
-    std::vector<EmissiveSurf> emissive_vec(em_count);
-    EmissiveSurf* emissive = emissive_vec.data();
+    EmissiveSurf* emissive = (EmissiveSurf*)calloc(em_count > 0 ? em_count : 1, sizeof(EmissiveSurf));
     ctx.num_emissive = em_count;
     if (em_count > 0) {
         int ei = 0;
@@ -721,12 +718,19 @@ static RenderContext setup_context(const Scene* scene) {
     return ctx;
 }
 
-static void free_mesh_data(MeshObjData* meshes, int num_meshes) {
-    if (meshes) {
-        for (int i = 0; i < num_meshes; i++)
-            free(meshes[i].bvh_nodes);
-        free(meshes);
+static void free_render_buffers(RenderContext* ctx) {
+    if (ctx->meshes) {
+        for (int i = 0; i < ctx->num_meshes; i++)
+            free(ctx->meshes[i].bvh_nodes);
+        free(ctx->meshes);
     }
+    if (ctx->emissive) {
+        for (int i = 0; i < ctx->num_emissive; i++)
+            free(ctx->emissive[i].tri_cdf);
+        free(ctx->emissive);
+    }
+    free(ctx->spheres);
+    free(ctx->lights);
 }
 
 static void apply_denoise(Image* img, const Scene* scene) {
@@ -741,7 +745,7 @@ Image* render_frame(const Scene* scene) {
     render_rows(&ctx, 0, ctx.height);
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
-    free_mesh_data(ctx.meshes, ctx.num_meshes);
+    free_render_buffers(&ctx);
     return ctx.img;
 }
 
@@ -760,6 +764,6 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
     for (auto& th : threads) th.join();
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
-    free_mesh_data(ctx.meshes, ctx.num_meshes);
+    free_render_buffers(&ctx);
     return ctx.img;
 }

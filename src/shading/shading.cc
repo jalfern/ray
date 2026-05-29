@@ -127,3 +127,51 @@ V eval_texture(V p, V primary_color, const TextureData* tex) {
             return c1;
     }
 }
+
+// New functionality for UV texture mapping - properly integrate with mesh shading
+V sample_mesh_uv_texture(V uv_coords, const TextureData* tex) {
+    // This function is used to sample pattern-based textures at UV coordinates
+    if (!tex || tex->type == 0) {
+        return (V){1.0f, 1.0f, 1.0f}; // Default white if no texture
+    }
+    
+    float s = tex->scale;
+    V c1 = (V){1.0f, 1.0f, 1.0f}; // Default white 
+    V c2 = tex->color2;
+
+    switch (tex->type) {
+        case 1: {
+            // Checkerboard pattern
+            int u = (int)floorf(uv_coords.x * s);
+            int v = (int)floorf(uv_coords.y * s);
+            return ((u + v) & 1) ? c1 : c2;
+        }
+        case 2: {
+            // Circle pattern 
+            float cx = floorf(uv_coords.x * s) + 0.5f;
+            float cy = floorf(uv_coords.y * s) + 0.5f;
+            float dx = uv_coords.x * s - cx;
+            float dy = uv_coords.y * s - cy;
+            return (dx*dx + dy*dy < 0.12f) ? c1 : c2;
+        }
+        case 3: {
+            // Marble pattern
+            float n = vnoise(uv_coords.x * s * 0.5f, uv_coords.y * s * 0.5f, 0.0f);
+            float marble = sinf((uv_coords.x + uv_coords.y) * s * 1.5f + n * 3.0f) * 0.5f + 0.5f;
+            return (V){c1.x * marble + c2.x * (1.0f - marble),
+                       c1.y * marble + c2.y * (1.0f - marble),
+                       c1.z * marble + c2.z * (1.0f - marble)};
+        }
+        case 4: {
+            // Ring pattern
+            float dx = uv_coords.x - 0.5f, dy = uv_coords.y - 0.5f;
+            float dist = sqrtf(dx*dx + dy*dy) * s * 2.0f;
+            float ring = sinf(dist * (float)M_PI * 2.0f) * 0.5f + 0.5f;
+            return (V){c1.x * ring + c2.x * (1.0f - ring),
+                       c1.y * ring + c2.y * (1.0f - ring),
+                       c1.z * ring + c2.z * (1.0f - ring)};
+        }
+        default:
+            return c1;
+    }
+}
