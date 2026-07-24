@@ -128,6 +128,7 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         float len = sqrtf(nx*nx + ny*ny + nz*nz);
         if (len > EPS) { nx /= len; ny /= len; nz /= len; }
         *hit_normal = (V){nx, ny, nz};
+        if (dot(*hit_normal, d) > 0) *hit_normal = mul(*hit_normal, -1);
         out_uv[0] = w * best_tri->t0[0] + best_u * best_tri->t1[0] + best_v * best_tri->t2[0];
         out_uv[1] = w * best_tri->t0[1] + best_u * best_tri->t1[1] + best_v * best_tri->t2[1];
     }
@@ -634,7 +635,7 @@ static RenderContext setup_context(const Scene* scene) {
                 int max_nodes = 2 * scene->meshes[i].num_tris;
                 meshes[i].bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
                 meshes[i].num_bvh_nodes = bvh_build(meshes[i].bvh_nodes,
-                    meshes[i].tris, meshes[i].num_tris);
+                    max_nodes, meshes[i].tris, meshes[i].num_tris);
             } else {
                 meshes[i].bvh_nodes = NULL;
                 meshes[i].num_bvh_nodes = 0;
