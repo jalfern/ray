@@ -6,6 +6,7 @@
 #include <ctype.h>
 
 static char* skip_ws(char* p) {
+    if (!p) return NULL;
     while (*p && isspace(*p)) p++;
     return p;
 }
@@ -85,43 +86,48 @@ static char* parse_sphere(char* p, Sphere* s) {
         
         if (strcmp(key, "pos") == 0) {
             p = parse_vec3(p, &s->pos);
-        } else if (strcmp(key, "radius") == 0) {
+            if (!p) return NULL;
+          } else if (strcmp(key, "radius") == 0) {
             p = parse_float(p, &s->radius);
-        } else if (strcmp(key, "reflectivity") == 0) {
+          } else if (strcmp(key, "reflectivity") == 0) {
             p = parse_float(p, &s->reflectivity);
-        } else if (strcmp(key, "ior") == 0) {
+          } else if (strcmp(key, "ior") == 0) {
             p = parse_float(p, &s->ior);
-        } else if (strcmp(key, "color") == 0) {
+          } else if (strcmp(key, "color") == 0) {
             p = parse_vec3(p, &s->color);
-        } else if (strcmp(key, "material") == 0) {
+            if (!p) return NULL;
+          } else if (strcmp(key, "material") == 0) {
             p = parse_string(p, s->material, sizeof(s->material));
-        } else if (strcmp(key, "texture") == 0) {
+            if (!p) return NULL;
+          } else if (strcmp(key, "texture") == 0) {
             if (*p == '{') p++;
             while (*p && *p != '}') {
                 char tkey[64];
                 p = parse_string(p, tkey, sizeof(tkey));
-                if (!p) break;
+                if (!p) return NULL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') return NULL;
                 p++;
                 p = skip_ws(p);
                 if (strcmp(tkey, "type") == 0) {
                     char buf[16];
                     p = parse_string(p, buf, sizeof(buf));
+                    if (!p) return NULL;
                     if (strcmp(buf, "checker") == 0) s->tex_type = 1;
                     else if (strcmp(buf, "polka") == 0) s->tex_type = 2;
                     else if (strcmp(buf, "marble") == 0) s->tex_type = 3;
                     else if (strcmp(buf, "rings") == 0) s->tex_type = 4;
-                } else if (strcmp(tkey, "scale") == 0) {
+                  } else if (strcmp(tkey, "scale") == 0) {
                     p = parse_float(p, &s->tex_scale);
-                } else if (strcmp(tkey, "color2") == 0) {
+                  } else if (strcmp(tkey, "color2") == 0) {
                     p = parse_vec3(p, &s->tex_color2);
-                } else {
+                    if (!p) return NULL;
+                  } else {
                     while (*p && *p != ',' && *p != '}') p++;
-                }
+                  }
                 p = skip_ws(p);
                 if (*p == ',') p++;
-            }
+              }
             if (*p == '}') p++;
         } else {
             while (*p && *p != ',' && *p != '}') p++;
@@ -148,9 +154,10 @@ static char* parse_light(char* p, Light* l) {
         p = skip_ws(p);
         if (strcmp(key, "pos") == 0) {
             p = parse_vec3(p, &l->pos);
-        } else if (strcmp(key, "size") == 0) {
+            if (!p) return NULL;
+           } else if (strcmp(key, "size") == 0) {
             p = parse_float(p, &l->size);
-        } else {
+           } else {
             while (*p && *p != ',' && *p != '}') p++;
         }
         p = skip_ws(p);
@@ -232,52 +239,57 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
             if (!p) return NULL;
             if (fname[0] && fname[0] != '/') {
                 snprintf(file_path, sizeof(file_path), "%s/%s", scene_dir, fname);
-            } else {
+               } else {
                 strncpy(file_path, fname, sizeof(file_path) - 1);
-            }
-        } else if (strcmp(key, "pos") == 0) {
+               }
+            } else if (strcmp(key, "pos") == 0) {
             p = parse_vec3(p, &m->pos);
-        } else if (strcmp(key, "scale") == 0) {
+            if (!p) return NULL;
+            } else if (strcmp(key, "scale") == 0) {
             p = parse_float(p, &m->scale);
-        } else if (strcmp(key, "reflectivity") == 0) {
+            } else if (strcmp(key, "reflectivity") == 0) {
             p = parse_float(p, &m->reflectivity);
-        } else if (strcmp(key, "ior") == 0) {
+            } else if (strcmp(key, "ior") == 0) {
             p = parse_float(p, &m->ior);
-        } else if (strcmp(key, "color") == 0) {
+            } else if (strcmp(key, "color") == 0) {
             p = parse_vec3(p, &m->color);
-        } else if (strcmp(key, "material") == 0) {
+            if (!p) return NULL;
+            } else if (strcmp(key, "material") == 0) {
             p = parse_string(p, m->material, sizeof(m->material));
-        } else if (strcmp(key, "texture") == 0) {
+            if (!p) return NULL;
+            } else if (strcmp(key, "texture") == 0) {
             if (*p == '{') p++;
             while (*p && *p != '}') {
                 char tkey[64];
                 p = parse_string(p, tkey, sizeof(tkey));
-                if (!p) break;
+                if (!p) return NULL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') return NULL;
                 p++;
                 p = skip_ws(p);
                 if (strcmp(tkey, "type") == 0) {
                     char buf[16];
                     p = parse_string(p, buf, sizeof(buf));
+                    if (!p) return NULL;
                     if (strcmp(buf, "checker") == 0) m->tex_type = 1;
                     else if (strcmp(buf, "polka") == 0) m->tex_type = 2;
                     else if (strcmp(buf, "marble") == 0) m->tex_type = 3;
                     else if (strcmp(buf, "rings") == 0) m->tex_type = 4;
-                } else if (strcmp(tkey, "scale") == 0) {
+                   } else if (strcmp(tkey, "scale") == 0) {
                     p = parse_float(p, &m->tex_scale);
-                } else if (strcmp(tkey, "color2") == 0) {
+                   } else if (strcmp(tkey, "color2") == 0) {
                     p = parse_vec3(p, &m->tex_color2);
-                } else {
+                    if (!p) return NULL;
+                   } else {
                     while (*p && *p != ',' && *p != '}') p++;
-                }
+                   }
                 p = skip_ws(p);
                 if (*p == ',') p++;
-            }
+               }
             if (*p == '}') p++;
-        } else {
+            } else {
             while (*p && *p != ',' && *p != '}') p++;
-        }
+            }
         p = skip_ws(p);
         if (*p == ',') p++;
     }
@@ -359,17 +371,19 @@ Scene* parse_scene(const char* filename) {
     scene->spheres = NULL;
     scene->num_meshes = 0;
     scene->meshes = NULL;
-    
+
+#define PARSE_FAIL do { free(json); free_scene(scene); return NULL; } while(0)
+
     while (*p && *p != '}') {
         char key[64];
         p = parse_string(p, key, sizeof(key));
-        if (!p) break;
-        
+        if (!p) PARSE_FAIL;
+
         p = skip_ws(p);
-        if (*p != ':') break;
+        if (*p != ':') PARSE_FAIL;
         p++;
         p = skip_ws(p);
-        
+
         if (strcmp(key, "width") == 0) {
             p = parse_int(p, &scene->width);
         } else if (strcmp(key, "height") == 0) {
@@ -391,14 +405,15 @@ Scene* parse_scene(const char* filename) {
             while (*p && *p != '}') {
                 char ekey[64];
                 p = parse_string(p, ekey, sizeof(ekey));
-                if (!p) break;
+                if (!p) PARSE_FAIL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') PARSE_FAIL;
                 p++;
                 p = skip_ws(p);
 
                 if (strcmp(ekey, "file") == 0) {
                     p = parse_string(p, scene->env_file, sizeof(scene->env_file));
+                    if (!p) PARSE_FAIL;
                 } else if (strcmp(ekey, "intensity") == 0) {
                     p = parse_float(p, &scene->env_intensity);
                 } else {
@@ -410,21 +425,24 @@ Scene* parse_scene(const char* filename) {
             if (*p == '}') p++;
         } else if (strcmp(key, "output") == 0) {
             p = parse_string(p, scene->output, sizeof(scene->output));
+            if (!p) PARSE_FAIL;
         } else if (strcmp(key, "camera") == 0) {
             if (*p == '{') p++;
             while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
-                if (!p) break;
+                if (!p) PARSE_FAIL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') PARSE_FAIL;
                 p++;
                 p = skip_ws(p);
-                
+
                 if (strcmp(ckey, "pos") == 0) {
                     p = parse_vec3(p, &scene->camera_pos);
+                    if (!p) PARSE_FAIL;
                 } else if (strcmp(ckey, "target") == 0) {
                     p = parse_vec3(p, &scene->camera_target);
+                    if (!p) PARSE_FAIL;
                 } else if (strcmp(ckey, "aperture") == 0) {
                     p = parse_float(p, &scene->aperture);
                 } else if (strcmp(ckey, "focus_dist") == 0) {
@@ -438,22 +456,22 @@ Scene* parse_scene(const char* filename) {
             if (*p == '}') p++;
         } else if (strcmp(key, "lights") == 0) {
             p = parse_lights_array(p, scene);
-            if (!p) break;
+            if (!p) PARSE_FAIL;
         } else if (strcmp(key, "spheres") == 0) {
             p = parse_spheres_array(p, scene);
-            if (!p) break;
+            if (!p) PARSE_FAIL;
         } else if (strcmp(key, "meshes") == 0) {
             p = parse_meshes_array(p, scene, scene_dir);
-            if (!p) break;
+            if (!p) PARSE_FAIL;
         } else if (strcmp(key, "animation") == 0) {
             scene->has_animation = 1;
             if (*p == '{') p++;
             while (*p && *p != '}') {
                 char akey[64];
                 p = parse_string(p, akey, sizeof(akey));
-                if (!p) break;
+                if (!p) PARSE_FAIL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') PARSE_FAIL;
                 p++;
                 p = skip_ws(p);
 
@@ -466,14 +484,15 @@ Scene* parse_scene(const char* filename) {
                     while (*p && *p != '}') {
                         char okey[64];
                         p = parse_string(p, okey, sizeof(okey));
-                        if (!p) break;
+                        if (!p) PARSE_FAIL;
                         p = skip_ws(p);
-                        if (*p != ':') break;
+                        if (*p != ':') PARSE_FAIL;
                         p++;
                         p = skip_ws(p);
 
                         if (strcmp(okey, "center") == 0) {
                             p = parse_vec3(p, &scene->animation.orbit_center);
+                            if (!p) PARSE_FAIL;
                         } else if (strcmp(okey, "radius") == 0) {
                             p = parse_float(p, &scene->animation.orbit_radius);
                         } else if (strcmp(okey, "height") == 0) {
@@ -497,12 +516,12 @@ Scene* parse_scene(const char* filename) {
             while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
-                if (!p) break;
+                if (!p) PARSE_FAIL;
                 p = skip_ws(p);
-                if (*p != ':') break;
+                if (*p != ':') PARSE_FAIL;
                 p++;
                 p = skip_ws(p);
-                
+
                 if (strcmp(ckey, "checkerboard") == 0) {
                     scene->has_floor = 1;
                     while (*p && !isspace(*p) && *p != ',' && *p != '}') p++;
@@ -516,11 +535,13 @@ Scene* parse_scene(const char* filename) {
         } else {
             while (*p && *p != ',' && *p != '}') p++;
         }
-        
+
         p = skip_ws(p);
         if (*p == ',') p++;
     }
-    
+
+#undef PARSE_FAIL
+
     // Default light if none specified
     if (scene->num_lights == 0) {
         scene->num_lights = 1;

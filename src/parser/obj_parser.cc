@@ -72,7 +72,10 @@ static ObjIdx parse_idx(const char** pp) {
 
 int load_obj(const char* filename, TriGpu** out_tris, int* out_count) {
     FILE* f = fopen(filename, "r");
-    if (!f) return -1;
+    if (!f) {
+        reset_state();
+        return -1;
+    }
 
     reset_state();
 
@@ -85,7 +88,17 @@ int load_obj(const char* filename, TriGpu** out_tris, int* out_count) {
         if (p[0] == 'v' && p[1] == ' ') {
             float x, y, z;
             if (sscanf(p, "v %f %f %f", &x, &y, &z) >= 3) gv(x, y, z);
-        } else if (p[0] == 'v' && p[1] == 'n') {
+         } else if (p[0] == 'v' && p[1] == 't' && (p[2] == ' ' || p[2] == '\t')) {
+            float x, y;
+            if (sscanf(p, "vt %f %f", &x, &y) >= 2) {
+                if (num_texcs >= cap_texcs) {
+                    cap_texcs = cap_texcs ? cap_texcs * 2 : OBJ_CHUNK;
+                    texcs = (ObjVt*)realloc(texcs, cap_texcs * sizeof(ObjVt));
+                 }
+                texcs[num_texcs].x = x; texcs[num_texcs].y = y;
+                num_texcs++;
+             }
+         } else if (p[0] == 'v' && p[1] == 'n') {
             float x, y, z;
             if (sscanf(p, "vn %f %f %f", &x, &y, &z) >= 3) gvn(x, y, z);
         } else if (p[0] == 'f' && p[1] == ' ') {
