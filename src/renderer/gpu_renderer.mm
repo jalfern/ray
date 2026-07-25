@@ -7,6 +7,7 @@
 // one thread per pixel, and converts the result back into an Image using the
 // same 8-bit conversion as the CPU path (renderer.cc render_rows).
 //
+// The shader/pipeline are cached across calls so they compile only once.
 // Returns NULL to fall back to the CPU renderer when Metal is unavailable or
 // the shader fails to compile. Full mesh support including BVH, materials,
 // emissive meshes, and per-triangle area CDFs.
@@ -26,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 #include "shader_src.h"   // defines: static const char* kShaderSource
 
@@ -87,6 +89,49 @@ static_assert(sizeof(SceneGpu) == 44, "SceneGpu layout must match shaders.metal"
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 44, "MeshMatGpu layout must match shaders.metal");
 
+// Cached GPU pipeline — initialized once on first call.
+static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool gpu_initialized = false;
+static id<MTLDevice> gpu_device = nil;
+static id<MTLComputePipelineState> gpu_pso = nil;
+static id<MTLCommandQueue> gpu_queue = nil;
+
+static void gpu_init_once(void) {
+    if (gpu_initialized) return;
+    pthread_mutex_lock(&gpu_init_mutex);
+    if (!gpu_initialized) {
+        gpu_device = MTLCreateSystemDefaultDevice();
+        if (gpu_device) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [gpu_device newLibraryWithSource:@(kShaderSource)
+                                                         options:nil
+                                                           error:&err];
+            if (lib) {
+                id<MTLFunction> fn = [lib newFunctionWithName:@"rk"];
+                if (fn) {
+                    gpu_pso = [gpu_device newComputePipelineStateWithFunction:fn error:&err];
+                 }
+                if (gpu_pso) {
+                    gpu_queue = [gpu_device newCommandQueue];
+                 }
+              }
+            if (!gpu_pso || !gpu_queue) {
+                fprintf(stderr, "[gpu] init failed: device=%p pso=%p queue=%p\n",
+                        (__bridge void*)gpu_device, (__bridge void*)gpu_pso,
+                        (__bridge void*)gpu_queue);
+                gpu_device = nil;
+             }
+         }
+        gpu_initialized = true;
+     }
+    pthread_mutex_unlock(&gpu_init_mutex);
+}
+
+#define GPU_GUARD do { \
+    gpu_init_once(); \
+    if (!gpu_device) return NULL; \
+    } while(0)
+
 static int gpu_mat_name_to_type(const char* name) {
     if (strcmp(name, "glass") == 0) return MAT_GLASS;
     if (strcmp(name, "plastic") == 0) return MAT_PLASTIC;
@@ -100,10 +145,10 @@ static const char* gpu_material(const void* mesh, int is_sphere) {
     if (is_sphere) {
         const Sphere* s = (const Sphere*)mesh;
         return s->material[0] ? s->material : "glass";
-     } else {
+      } else {
         const MeshObj* m = (const MeshObj*)mesh;
         return m->material[0] ? m->material : "glass";
-     }
+      }
 }
 
 static float gpu_tri_area(const TriGpu* tri) {
@@ -114,33 +159,12 @@ static float gpu_tri_area(const TriGpu* tri) {
 }
 
 Image* render_frame_gpu(const Scene* scene) {
-      @autoreleasepool {
-         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-         if (!device) return NULL;
+    GPU_GUARD;
 
-         NSError* err = nil;
-         id<MTLLibrary> lib = [device newLibraryWithSource:@(kShaderSource)
-                                                   options:nil
-                                                     error:&err];
-         if (!lib) {
-             fprintf(stderr, "[gpu] shader compile failed: %s\n",
-                     err ? err.localizedDescription.UTF8String : "unknown");
-             return NULL;
-          }
-         id<MTLFunction> fn = [lib newFunctionWithName:@"rk"];
-         if (!fn) { fprintf(stderr, "[gpu] kernel 'rk' not found\n"); return NULL; }
-         id<MTLComputePipelineState> pso =
-               [device newComputePipelineStateWithFunction:fn error:&err];
-         if (!pso) {
-             fprintf(stderr, "[gpu] pipeline creation failed: %s\n",
-                     err ? err.localizedDescription.UTF8String : "unknown");
-             return NULL;
-          }
-         id<MTLCommandQueue> queue = [device newCommandQueue];
+    const int W = scene->width, H = scene->height;
 
-         const int W = scene->width, H = scene->height;
-
-          // --- Camera ---
+    @autoreleasepool {
+         // --- Camera ---
          CameraGpu cam;
          cam.pos[0] = scene->camera_pos.x; cam.pos[1] = scene->camera_pos.y; cam.pos[2] = scene->camera_pos.z;
          cam.target[0] = scene->camera_target.x; cam.target[1] = scene->camera_target.y; cam.target[2] = scene->camera_target.z;
@@ -160,7 +184,7 @@ Image* render_frame_gpu(const Scene* scene) {
              spheres[i].tex_type = s->tex_type;
              spheres[i].tex_scale = s->tex_scale;
              spheres[i].tex_color2[0] = s->tex_color2.x; spheres[i].tex_color2[1] = s->tex_color2.y; spheres[i].tex_color2[2] = s->tex_color2.z;
-          }
+           }
 
           // --- Lights ---
          LightGpu* lights = (LightGpu*)calloc(scene->num_lights > 0 ? scene->num_lights : 1, sizeof(LightGpu));
@@ -169,7 +193,7 @@ Image* render_frame_gpu(const Scene* scene) {
              lights[i].pos[1] = scene->lights[i].pos.y;
              lights[i].pos[2] = scene->lights[i].pos.z;
              lights[i].size = scene->lights[i].size;
-          }
+           }
 
           // --- Meshes: combined triangle array + BVH ---
          int total_tris = 0;
@@ -187,8 +211,8 @@ Image* render_frame_gpu(const Scene* scene) {
                      all_tris[off] = scene->meshes[m].tris[t];
                      all_tris[off].mesh_idx = m;
                      off++;
-                   }
-               }
+                  }
+              }
              int max_nodes = 2 * total_tris;
              all_bvh = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
              num_bvh_nodes = bvh_build(all_bvh, max_nodes, all_tris, total_tris);
@@ -210,16 +234,15 @@ Image* render_frame_gpu(const Scene* scene) {
                }
            }
 
-          // Build per-mesh triangle offsets into the combined triangle array
+          // Per-mesh triangle offsets into combined triangle array
          int* tri_offset = (int*)calloc(scene->num_meshes > 0 ? scene->num_meshes : 1, sizeof(int));
-         for (int m = 0; m < scene->num_meshes; m++)
-             tri_offset[m] = 0;  // will be set with running sums below
-
-         int _off = 0;
-         for (int m = 0; m < scene->num_meshes; m++) {
-             tri_offset[m] = _off;
-             _off += scene->meshes[m].num_tris;
-          }
+           {
+             int _off = 0;
+             for (int m = 0; m < scene->num_meshes; m++) {
+                 tri_offset[m] = _off;
+                 _off += scene->meshes[m].num_tris;
+               }
+           }
 
           // --- Emissive surfaces (sphere + mesh) ---
          int num_emissive = 0, num_emissive_cdf = 0;
@@ -230,10 +253,10 @@ Image* render_frame_gpu(const Scene* scene) {
              if (gpu_mat_name_to_type(gpu_material(&scene->meshes[i], 0)) == MAT_EMISSIVE) {
                  num_emissive++;
                  num_emissive_cdf += scene->meshes[i].num_tris + 1;
-              }
+                }
          EmissiveGpu* emissive = (EmissiveGpu*)calloc(num_emissive > 0 ? num_emissive : 1, sizeof(EmissiveGpu));
          float* emissive_cdf = (float*)calloc(num_emissive_cdf > 0 ? num_emissive_cdf : 1, sizeof(float));
-          {
+           {
              int ei = 0, cdf_off = 0;
              for (int i = 0; i < scene->num_spheres; i++) {
                  const Sphere* s = &scene->spheres[i];
@@ -246,10 +269,12 @@ Image* render_frame_gpu(const Scene* scene) {
                  emissive[ei].tri_start = 0; emissive[ei].tri_end = 0;
                  emissive[ei].cdf_offset = 0; emissive[ei].src_idx = i;
                  ei++;
-              }
+               }
              for (int i = 0; i < scene->num_meshes; i++) {
                  if (gpu_mat_name_to_type(gpu_material(&scene->meshes[i], 0)) != MAT_EMISSIVE) continue;
-                 emissive[ei].emitted[0] = scene->meshes[i].color.x; emissive[ei].emitted[1] = scene->meshes[i].color.y; emissive[ei].emitted[2] = scene->meshes[i].color.z;
+                 emissive[ei].emitted[0] = scene->meshes[i].color.x;
+                 emissive[ei].emitted[1] = scene->meshes[i].color.y;
+                 emissive[ei].emitted[2] = scene->meshes[i].color.z;
                  emissive[ei].type = 1;
                  emissive[ei].c[0] = 0; emissive[ei].c[1] = 0; emissive[ei].c[2] = 0;
                  emissive[ei].r = 0;
@@ -262,11 +287,11 @@ Image* render_frame_gpu(const Scene* scene) {
                  for (int t = 0; t < scene->meshes[i].num_tris; t++) {
                      total += gpu_tri_area(&scene->meshes[i].tris[t]);
                      emissive_cdf[cdf_off++] = total;
-                   }
+                  }
                  emissive[ei].area = total;
                  ei++;
-              }
-          }
+               }
+           }
          free(tri_offset);
 
           // --- Scene globals ---
@@ -284,59 +309,67 @@ Image* render_frame_gpu(const Scene* scene) {
          sc.has_env = scene->env_file[0] ? 1 : 0;
 
           // --- GPU buffers ---
-         const MTLResourceOptions opts = MTLResourceStorageModeShared;
-         id<MTLBuffer> outBuf = [device newBufferWithLength:(NSUInteger)W * H * 3 * sizeof(float) options:opts];
-         id<MTLBuffer> sphereBuf = [device newBufferWithBytes:spheres length:(scene->num_spheres > 0 ? scene->num_spheres : 1) * sizeof(SphereGpu) options:opts];
-         id<MTLBuffer> lightBuf = [device newBufferWithBytes:lights length:(scene->num_lights > 0 ? scene->num_lights : 1) * sizeof(LightGpu) options:opts];
-         id<MTLBuffer> emisBuf = [device newBufferWithBytes:emissive length:(num_emissive > 0 ? num_emissive : 1) * sizeof(EmissiveGpu) options:opts];
-         size_t tri_len = total_tris > 0 ? (size_t)total_tris * sizeof(TriGpu) : 64;
-         size_t bvh_len = num_bvh_nodes > 0 ? (size_t)num_bvh_nodes * sizeof(BvhNode) : 64;
-         size_t mat_len = scene->num_meshes > 0 ? (size_t)scene->num_meshes * sizeof(MeshMatGpu) : 64;
-         size_t cdf_len = num_emissive_cdf > 0 ? (size_t)num_emissive_cdf * sizeof(float) : 64;
-         id<MTLBuffer> triBuf = [device newBufferWithBytes:all_tris length:tri_len options:opts];
-         id<MTLBuffer> bvhBuf = [device newBufferWithBytes:all_bvh length:bvh_len options:opts];
-         id<MTLBuffer> matBuf = [device newBufferWithBytes:mats length:mat_len options:opts];
-         id<MTLBuffer> cdfBuf = [device newBufferWithBytes:emissive_cdf length:cdf_len options:opts];
+          // Never pass NULL to newBufferWithBytes with Shared storage — Metal will
+          // try to read from the pointer and hang silently.
+         char dummy[64] = {0};
+         size_t tri_len = total_tris > 0 ? (size_t)total_tris * sizeof(TriGpu) : sizeof(dummy);
+         TriGpu* tris_ptr = total_tris > 0 ? all_tris : (TriGpu*)dummy;
+         size_t bvh_len = num_bvh_nodes > 0 ? (size_t)num_bvh_nodes * sizeof(BvhNode) : sizeof(dummy);
+         BvhNode* bvh_ptr = num_bvh_nodes > 0 ? all_bvh : (BvhNode*)dummy;
+         size_t mat_len = scene->num_meshes > 0 ? (size_t)scene->num_meshes * sizeof(MeshMatGpu) : sizeof(dummy);
+         MeshMatGpu* mats_ptr = scene->num_meshes > 0 ? mats : (MeshMatGpu*)dummy;
+         size_t cdf_len = num_emissive_cdf > 0 ? (size_t)num_emissive_cdf * sizeof(float) : sizeof(dummy);
+         float* cdf_ptr = num_emissive_cdf > 0 ? emissive_cdf : (float*)dummy;
 
-          // Env texture (procedural or HDR)
+         const MTLResourceOptions opts = MTLResourceStorageModeShared;
+         id<MTLBuffer> outBuf = [gpu_device newBufferWithLength:(NSUInteger)W * H * 3 * sizeof(float) options:opts];
+         id<MTLBuffer> sphereBuf = [gpu_device newBufferWithBytes:spheres length:(scene->num_spheres > 0 ? scene->num_spheres : 1) * sizeof(SphereGpu) options:opts];
+         id<MTLBuffer> lightBuf = [gpu_device newBufferWithBytes:lights length:(scene->num_lights > 0 ? scene->num_lights : 1) * sizeof(LightGpu) options:opts];
+         id<MTLBuffer> emisBuf = [gpu_device newBufferWithBytes:emissive length:(num_emissive > 0 ? num_emissive : 1) * sizeof(EmissiveGpu) options:opts];
+         id<MTLBuffer> triBuf = [gpu_device newBufferWithBytes:tris_ptr length:tri_len options:opts];
+         id<MTLBuffer> bvhBuf = [gpu_device newBufferWithBytes:bvh_ptr length:bvh_len options:opts];
+         id<MTLBuffer> matBuf = [gpu_device newBufferWithBytes:mats_ptr length:mat_len options:opts];
+         id<MTLBuffer> cdfBuf = [gpu_device newBufferWithBytes:cdf_ptr length:cdf_len options:opts];
+
+          // Dummy env texture (never sampled while has_env == 0, but must be bound)
          MTLTextureDescriptor* td =
-               [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
                                                                 width:1 height:1 mipmapped:NO];
          td.usage = MTLTextureUsageShaderRead;
-         id<MTLTexture> envTex = [device newTextureWithDescriptor:td];
+         id<MTLTexture> envTex = [gpu_device newTextureWithDescriptor:td];
 
          free(spheres); free(lights); free(emissive); free(mats); free(emissive_cdf);
          free(all_tris); free(all_bvh);
 
           // --- Dispatch ---
-         id<MTLCommandBuffer> cb = [queue commandBuffer];
+         id<MTLCommandBuffer> cb = [gpu_queue commandBuffer];
          id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-          [enc setComputePipelineState:pso];
-          [enc setBuffer:outBuf offset:0 atIndex:0];
-          [enc setBytes:&cam length:sizeof(cam) atIndex:1];
-          [enc setBytes:&sc length:sizeof(sc) atIndex:2];
-          [enc setBuffer:sphereBuf offset:0 atIndex:3];
-          [enc setBuffer:triBuf offset:0 atIndex:4];
-          [enc setBuffer:bvhBuf offset:0 atIndex:5];
-          [enc setBuffer:matBuf offset:0 atIndex:6];
-          [enc setBuffer:lightBuf offset:0 atIndex:7];
-          [enc setBuffer:emisBuf offset:0 atIndex:8];
-          [enc setBuffer:cdfBuf offset:0 atIndex:9];
-          [enc setTexture:envTex atIndex:0];
+         [enc setComputePipelineState:gpu_pso];
+         [enc setBuffer:outBuf offset:0 atIndex:0];
+         [enc setBytes:&cam length:sizeof(cam) atIndex:1];
+         [enc setBytes:&sc length:sizeof(sc) atIndex:2];
+         [enc setBuffer:sphereBuf offset:0 atIndex:3];
+         [enc setBuffer:triBuf offset:0 atIndex:4];
+         [enc setBuffer:bvhBuf offset:0 atIndex:5];
+         [enc setBuffer:matBuf offset:0 atIndex:6];
+         [enc setBuffer:lightBuf offset:0 atIndex:7];
+         [enc setBuffer:emisBuf offset:0 atIndex:8];
+         [enc setBuffer:cdfBuf offset:0 atIndex:9];
+         [enc setTexture:envTex atIndex:0];
 
          MTLSize tg = MTLSizeMake(16, 16, 1);
          MTLSize grid = MTLSizeMake(W, H, 1);
-          [enc dispatchThreads:grid threadsPerThreadgroup:tg];
-          [enc endEncoding];
-          [cb commit];
-          [cb waitUntilCompleted];
+         [enc dispatchThreads:grid threadsPerThreadgroup:tg];
+         [enc endEncoding];
+         [cb commit];
+         [cb waitUntilCompleted];
 
          if (cb.status != MTLCommandBufferStatusCompleted) {
              fprintf(stderr, "[gpu] command buffer failed (status %ld)\n", (long)cb.status);
              return NULL;
-          }
+           }
 
-          // --- Read back: float3 per pixel (already tone-mapped, in [0,1]) ---
+          // --- Read back ---
          Image* img = create_image(W, H);
          if (!img) return NULL;
          const float* out = (const float*)outBuf.contents;
@@ -344,7 +377,7 @@ Image* render_frame_gpu(const Scene* scene) {
              float v = out[i];
              if (v < 0.0f) v = 0.0f;
              img->data[i] = (unsigned char)(fminf(v, 1.0f) * 255.0f);
-          }
+           }
          return img;
        }
 }
