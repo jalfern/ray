@@ -286,10 +286,10 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
                 p = skip_ws(p);
                 if (*p == ',') p++;
                }
-            if (*p == '}') p++;
-            } else {
-            while (*p && *p != ',' && *p != '}') p++;
-            }
+             if (*p == '}') p++;
+             } else {
+              while (*p && *p != ',' && *p != '}') p++;
+             }
         p = skip_ws(p);
         if (*p == ',') p++;
     }
@@ -511,9 +511,13 @@ Scene* parse_scene(const char* filename) {
                 if (*p == ',') p++;
             }
             if (*p == '}') p++;
-        } else if (strcmp(key, "floor") == 0) {
-            if (*p == '{') p++;
-            while (*p && *p != '}') {
+          } else if (strcmp(key, "floor") == 0) {
+            if (*p == 't' || *p == 'T') {
+                scene->has_floor = 1;
+                while (*p && !isspace(*p) && *p != ',' && *p != '}') p++;
+            } else if (*p == '{') {
+                p++;
+                while (*p && *p != '}') {
                 char ckey[64];
                 p = parse_string(p, ckey, sizeof(ckey));
                 if (!p) PARSE_FAIL;
@@ -531,14 +535,15 @@ Scene* parse_scene(const char* filename) {
                 p = skip_ws(p);
                 if (*p == ',') p++;
             }
-            if (*p == '}') p++;
+             if (*p == '}') p++;
+          }
         } else {
-            while (*p && *p != ',' && *p != '}') p++;
-        }
+             while (*p && *p != ',' && *p != '}') p++;
+         }
 
         p = skip_ws(p);
         if (*p == ',') p++;
-    }
+     }
 
 #undef PARSE_FAIL
 

@@ -1,0 +1,11 @@
+{
+     "camera": {"pos": [0, 3, 8], "target": [0, 1.5, 0]},
+     "spheres": [
+         {"pos": [0, 1.5, 0], "radius": 1.5, "reflectivity": 0.8, "ior": 1.5, "color": [1.0, 1.0, 1.0], "material": "glass"}
+     ],
+     "environment": {"file": "../envmaps/test.hdr"},
+     "floor": true,
+     "output": "videos/env_test.png",
+     "width": 320,
+     "height": 240
+}

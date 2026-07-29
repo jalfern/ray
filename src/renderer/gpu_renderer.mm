@@ -19,6 +19,7 @@
 #include "gpu_renderer.h"
 #include "../../include/types.h"
 #include "../../include/bvh.h"
+#include "../envmap/envmap.h"
 
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
@@ -29,7 +30,27 @@
 #include <math.h>
 #include <pthread.h>
 
-#include "shader_src.h"   // defines: static const char* kShaderSource
+#include "shader_src.h"    // defines: static const char* kShaderSource
+
+static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, const char* env_file, float intensity) {
+    if (!env_file || !env_file[0]) return nil;
+    EnvMap* env = envmap_load(env_file, intensity);
+    if (!env || !env->data) return nil;
+
+    MTLTextureDescriptor* td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                        width:env->w height:env->h mipmapped:NO];
+    td.usage = MTLTextureUsageShaderRead;
+    td.storageMode = (MTLStorageMode)MTLResourceStorageModeShared;
+    id<MTLTexture> tex = [device newTextureWithDescriptor:td];
+    if (!tex) { envmap_free(env); return nil; }
+
+    [tex replaceRegion:MTLRegionMake2D(0, 0, env->w, env->h) mipmapLevel:0
+              withBytes:env->data bytesPerRow:env->w * 3 * sizeof(float)];
+
+    envmap_free(env);
+    return tex;
+}
 
 // ---------------------------------------------------------------------------
 // Host structs — byte-for-byte mirrors of the structs in shaders.metal.
@@ -331,12 +352,16 @@ Image* render_frame_gpu(const Scene* scene) {
          id<MTLBuffer> matBuf = [gpu_device newBufferWithBytes:mats_ptr length:mat_len options:opts];
          id<MTLBuffer> cdfBuf = [gpu_device newBufferWithBytes:cdf_ptr length:cdf_len options:opts];
 
-          // Dummy env texture (never sampled while has_env == 0, but must be bound)
-         MTLTextureDescriptor* td =
-                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
-                                                                width:1 height:1 mipmapped:NO];
-         td.usage = MTLTextureUsageShaderRead;
-         id<MTLTexture> envTex = [gpu_device newTextureWithDescriptor:td];
+          // Real env texture from HDR file, or dummy 1x1 placeholder
+          id<MTLTexture> envTex = gpu_create_env_texture(gpu_device, scene->env_file, scene->env_intensity);
+          if (!envTex) {
+              MTLTextureDescriptor* td =
+               [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                               width:1 height:1 mipmapped:NO];
+              td.usage = MTLTextureUsageShaderRead;
+              envTex = [gpu_device newTextureWithDescriptor:td];
+              sc.has_env = 0;
+          }
 
          free(spheres); free(lights); free(emissive); free(mats); free(emissive_cdf);
          free(all_tris); free(all_bvh);
