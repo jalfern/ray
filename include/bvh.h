@@ -16,6 +16,6 @@ typedef struct {
     int _pad;
 } BvhNode;
 
-int bvh_build(BvhNode* nodes, TriGpu* tris, int num_tris);
+int bvh_build(BvhNode* nodes, int max_nodes, TriGpu* tris, int num_tris);
 
 #endif

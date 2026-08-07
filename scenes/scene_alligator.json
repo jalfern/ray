@@ -1,0 +1,48 @@
+{
+  "width": 1280,
+  "height": 720,
+  "camera": {
+    "pos": [
+      0,
+      2,
+      5
+    ],
+    "target": [
+      0,
+      0.3,
+      0
+    ],
+    "aperture": 0.1,
+    "focus_dist": 5
+  },
+  "meshes": [
+    {
+      "file": "../models/alligator.obj",
+      "pos": [
+        -500.5,
+        -87.5,
+        0
+      ],
+      "scale": 0.003,
+      "color": [
+        0.6,
+        0.7,
+        0.5
+      ],
+      "material": "plastic",
+      "reflectivity": 0.15
+    }
+  ],
+  "lights": [
+    {
+      "pos": [
+        3,
+        8,
+        4
+      ],
+      "size": 2
+    }
+  ],
+  "floor": true,
+  "output": "images/render_alligator.png"
+}

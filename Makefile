@@ -1,6 +1,7 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -O2 -I./include -std=c++11
-LDFLAGS = -lm -lz
+MMFLAGS = -Wall -Wextra -O2 -I./include -I$(BUILD_DIR)/renderer -std=c++11 -fobjc-arc
+LDFLAGS = -lm -lz -framework Metal -framework Foundation
 
 SRC_DIR = src
 BUILD_DIR = build
@@ -13,13 +14,18 @@ SOURCES = $(SRC_DIR)/main.cc \
           $(SRC_DIR)/parser/obj_parser.cc \
           $(SRC_DIR)/renderer/renderer.cc \
           $(SRC_DIR)/renderer/bvh.cc \
-          $(SRC_DIR)/renderer/gpu_renderer.cc \
           $(SRC_DIR)/output/output.cc \
           $(SRC_DIR)/shading/shading.cc \
           $(SRC_DIR)/denoiser/denoiser.cc \
           $(SRC_DIR)/envmap/envmap.cc
 
+MM_SOURCES = $(SRC_DIR)/renderer/gpu_renderer.mm
+
 OBJECTS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(SOURCES))
+OBJECTS += $(patsubst $(SRC_DIR)/%.mm,$(BUILD_DIR)/%.o,$(MM_SOURCES))
+
+SHADER_SRC = $(SRC_DIR)/renderer/shaders.metal
+SHADER_HDR = $(BUILD_DIR)/renderer/shader_src.h
 
 TARGET = ray2
 
@@ -33,6 +39,18 @@ $(TARGET): $(OBJECTS)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Embed the Metal shader source as a C string compiled at runtime (no `metal`
+# CLI / Xcode needed — newLibraryWithSource uses the framework's compiler).
+$(SHADER_HDR): $(SHADER_SRC)
+	mkdir -p $(dir $@)
+	printf 'static const char* kShaderSource = R"METALSHADER(\n' > $@
+	cat $< >> $@
+	printf '\n)METALSHADER";\n' >> $@
+
+$(BUILD_DIR)/renderer/gpu_renderer.o: $(SRC_DIR)/renderer/gpu_renderer.mm $(SHADER_HDR)
+	mkdir -p $(dir $@)
+	$(CXX) $(MMFLAGS) -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

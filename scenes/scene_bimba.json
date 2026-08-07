@@ -1,0 +1,48 @@
+{
+  "width": 1280,
+  "height": 720,
+  "camera": {
+    "pos": [
+      0,
+      1.5,
+      4
+    ],
+    "target": [
+      0,
+      0,
+      -1.16
+    ],
+    "aperture": 0.05,
+    "focus_dist": 4
+  },
+  "meshes": [
+    {
+      "file": "../models/bimba.obj",
+      "pos": [
+        0,
+        0,
+        1.16
+      ],
+      "scale": 12,
+      "color": [
+        0.8,
+        0.7,
+        0.6
+      ],
+      "material": "plastic",
+      "reflectivity": 0.3
+    }
+  ],
+  "lights": [
+    {
+      "pos": [
+        2,
+        5,
+        3
+      ],
+      "size": 2
+    }
+  ],
+  "floor": true,
+  "output": "images/render_bimba.png"
+}

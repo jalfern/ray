@@ -1,63 +1,12 @@
 #include "bvh.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
 #include <vector>
 
 #define SAH_BINS 12
-
-// Triangle clipping functions for SBVH
-struct TriangleFragment {
-    float v0[3], v1[3], v2[3];
-    int original_idx;
-    float bbox_min[3], bbox_max[3];
-};
-
-static void triangle_bbox(const float v0[3], const float v1[3], const float v2[3], float* min, float* max) {
-    min[0] = fminf(fminf(v0[0], v1[0]), v2[0]);
-    min[1] = fminf(fminf(v0[1], v1[1]), v2[1]);
-    min[2] = fminf(fminf(v0[2], v1[2]), v2[2]);
-    max[0] = fmaxf(fmaxf(v0[0], v1[0]), v2[0]);
-    max[1] = fmaxf(fmaxf(v0[1], v1[1]), v2[1]);
-    max[2] = fmaxf(fmaxf(v0[2], v1[2]), v2[2]);
-}
-
-// Clip triangle against a splitting plane - properly implemented for SBVH
-static int clip_triangle_by_plane(const float v0[3], const float v1[3], const float v2[3],
-                                    int axis, float split_pos, TriangleFragment fragments[2]) {
-    // Simplified but functional triangle clipping for basic BVH
-    // For a production implementation, this should be more robust.
-    
-    // Check if all vertices are on the same side
-    int left = 0, right = 0;
-    float coords[3][3] = {{v0[0], v0[1], v0[2]}, {v1[0], v1[1], v1[2]}, {v2[0], v2[1], v2[2]}};
-    
-    for (int i = 0; i < 3; i++) {
-        if (coords[i][axis] < split_pos) left++;
-        else if (coords[i][axis] > split_pos) right++;
-    }
-    
-    // Simple rule: if all vertices on one side, just include triangle on that side
-    if (left == 3 || right == 3) {
-        memcpy(fragments[0].v0, v0, sizeof(float) * 3);
-        memcpy(fragments[0].v1, v1, sizeof(float) * 3);
-        memcpy(fragments[0].v2, v2, sizeof(float) * 3);
-        fragments[0].original_idx = 0;
-        triangle_bbox(v0, v1, v2, fragments[0].bbox_min, fragments[0].bbox_max);
-        return 1;
-    }
-    
-    // If we need to split (this is a simplified approach for basic implementation)
-    // In a fully-featured SBVH, this would properly compute clipped triangle vertices
-    // For now, we simply treat it as being on the left (or one side) to avoid complexity
-    memcpy(fragments[0].v0, v0, sizeof(float) * 3);
-    memcpy(fragments[0].v1, v1, sizeof(float) * 3);
-    memcpy(fragments[0].v2, v2, sizeof(float) * 3);
-    fragments[0].original_idx = 0;
-    triangle_bbox(v0, v1, v2, fragments[0].bbox_min, fragments[0].bbox_max);
-    return 1;
-}
 
 static float bbox_area(const float* min, const float* max) {
     float dx = max[0] - min[0];
@@ -111,13 +60,15 @@ struct TriRef {
     int idx;
     float c[3];
     float bmin[3], bmax[3];
-    bool is_clipped;
-    int fragment_count;
-    float bbox_min[3], bbox_max[3];
 };
 
-static int build_rec(BvhNode* nodes, int& node_count,
-                      TriGpu* tris, std::vector<TriRef>& refs, int start, int end) {
+static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
+                       TriGpu* tris, std::vector<TriRef>& refs, int start, int end) {
+    if (node_count >= max_nodes) {
+        fprintf(stderr, "[bvh] warning: node buffer overflow (%d >= %d), aborting build\n",
+                node_count, max_nodes);
+        return -1;
+    }
     int node_idx = node_count++;
     int count = end - start;
 
@@ -255,63 +206,73 @@ static int build_rec(BvhNode* nodes, int& node_count,
 
     nodes[node_idx].tri_start = -1;
     nodes[node_idx].tri_end = -1;
-    nodes[node_idx].left = build_rec(nodes, node_count, tris, refs, start, mid);
-    nodes[node_idx].right = build_rec(nodes, node_count, tris, refs, mid, end);
+    int left_idx  = build_rec(nodes, node_count, max_nodes, tris, refs, start, mid);
+    int right_idx = build_rec(nodes, node_count, max_nodes, tris, refs, mid, end);
+    if (left_idx < 0 || right_idx < 0) return -1;
+    nodes[node_idx].left  = left_idx;
+    nodes[node_idx].right = right_idx;
     return node_idx;
 }
 
-int bvh_build(BvhNode* nodes, TriGpu* tris, int num_tris) {
-    if (num_tris == 0) return 0;
+int bvh_build(BvhNode* nodes, int max_nodes, TriGpu* tris, int num_tris) {
+    if (num_tris == 0 || max_nodes <= 0) return 0;
 
     std::vector<TriRef> refs(num_tris);
     for (int i = 0; i < num_tris; i++) {
         refs[i].idx = i;
         centroid(tris, i, refs[i].c);
         tri_bbox(tris, i, refs[i].bmin, refs[i].bmax);
-        refs[i].is_clipped = false;
-        refs[i].fragment_count = 1;
-    }
+     }
 
     int node_count = 0;
-    build_rec(nodes, node_count, tris, refs, 0, num_tris);
+    int rc = build_rec(nodes, node_count, max_nodes, tris, refs, 0, num_tris);
+    if (rc < 0) return 0;
 
-    // Reorder tris so leaf ranges are contiguous  
-    // Optimized version that reduces memory operations
-    if (num_tris > 0) {
-        TriGpu* temp_tris = (TriGpu*)malloc(num_tris * sizeof(TriGpu));
-        int* new_indices = (int*)malloc(num_tris * sizeof(int));
-        
-        int out_idx = 0;
-        
-        // First pass: mark which triangles go where in their final order
-        for (int i = 0; i < node_count; i++) {
-            if (nodes[i].left == -1) {
-                int old_start = nodes[i].tri_start;
-                int old_end = nodes[i].tri_end;
-                for (int j = old_start; j < old_end; j++) {
-                    new_indices[refs[j].idx] = out_idx;
-                    temp_tris[out_idx] = tris[refs[j].idx];
-                    out_idx++;
-                }
-            }
-        }
-        
-        // Second pass: update leaf node ranges to new indices
-        out_idx = 0;
-        for (int i = 0; i < node_count; i++) {
-            if (nodes[i].left == -1) {
-                int old_start = nodes[i].tri_start;
-                nodes[i].tri_start = out_idx;
-                out_idx += (nodes[i].tri_end - old_start);
-                nodes[i].tri_end = out_idx;
-            }
-        }
-        
-        memcpy(tris, temp_tris, num_tris * sizeof(TriGpu));
-        free(temp_tris);
-        free(new_indices);
-    }
-    // Note: refs is a vector so no need to free it explicitly
+    // Reorder triangles so leaf ranges are contiguous in the triangle array.
+    // After bvh_build the leaves hold old index ranges [tri_start, tri_end) into
+    // the 'refs' vector.  We build a permutation map, copy triangles into new
+    // contigious slots, then patch every leaf to point at the new ranges.
+    //
+    // NOTE: iterating leaves in BFS order (by node index) is critical, because
+    // the BVH layout guarantees that sibling / ancestor nodes always have
+    // higher indices — this is an invariant of the build_rec traversal.
+    int* perm = (int*)malloc(num_tris * sizeof(int));
+    TriGpu* ordered = (TriGpu*)malloc(num_tris * sizeof(TriGpu));
+    memset(perm, 0xFF, num_tris * sizeof(int));
+
+    int out_idx = 0;
+    for (int i = 0; i < node_count; i++) {
+        if (nodes[i].left != -1) continue; // internal node
+        for (int j = nodes[i].tri_start; j < nodes[i].tri_end; j++) {
+            int orig = refs[j].idx;
+            if (perm[orig] >= 0) continue; // already placed — skip dup
+            perm[orig] = out_idx;
+            ordered[out_idx] = tris[orig];
+            out_idx++;
+         }
+     }
+    // Compact: fill gaps from triangles that ended up in no leaf (shouldn't
+    // happen, but guard against degenerate geometries).
+    for (int i = 0; i < num_tris; i++) {
+        if (perm[i] < 0) {
+            perm[i] = out_idx;
+            ordered[out_idx] = tris[i];
+            out_idx++;
+         }
+     }
+
+    out_idx = 0;
+    for (int i = 0; i < node_count; i++) {
+        if (nodes[i].left != -1) continue;
+        int n = nodes[i].tri_end - nodes[i].tri_start;
+        nodes[i].tri_start = out_idx;
+        nodes[i].tri_end   = out_idx + n;
+        out_idx += n;
+     }
+
+    memcpy(tris, ordered, num_tris * sizeof(TriGpu));
+    free(perm);
+    free(ordered);
 
     return node_count;
 }

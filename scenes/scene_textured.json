@@ -1,0 +1,11 @@
+{
+  "camera": {"pos": [5, 4, 7], "target": [0, 1.5, 0]},
+  "meshes": [
+    {"file": "../models/bunny.obj", "pos": [0, 1.5, 0], "scale": 17, "color": [0.95, 0.85, 0.75], "material": "plastic", "tex_type": 1, "tex_scale": 8.0, "tex_color2": [0.2, 0.2, 0.2]}
+  ],
+  "lights": [{"pos": [5, 8, 5], "size": 3}],
+  "floor": {"checkerboard": true},
+  "output": "images/test_textured.png",
+  "width": 800,
+  "height": 600
+}

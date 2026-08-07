@@ -1,0 +1,76 @@
+{
+  "camera": {
+    "pos": [0, 5, 15],
+    "target": [0, 2, 0]
+  },
+  "spheres": [
+    {
+      "pos": [-5, 2, 0],
+      "radius": 1.5,
+      "color": [1.0, 0.3, 0.3],
+      "material": "plastic",
+      "texture": {
+        "type": 1,
+        "scale": 3.0,
+        "color2": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "pos": [0, 2, 0],
+      "radius": 1.5,
+      "color": [0.8, 0.2, 0.8],
+      "material": "plastic",
+      "texture": {
+        "type": 2,
+        "scale": 2.5,
+        "color2": [0.9, 0.9, 0.9]
+      }
+    },
+    {
+      "pos": [5, 2, 0],
+      "radius": 1.5,
+      "color": [0.1, 0.6, 0.3],
+      "material": "plastic",
+      "texture": {
+        "type": 3,
+        "scale": 1.0,
+        "color2": [1.0, 1.0, 1.0]
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "file": "../models/cube_uv.obj",
+      "pos": [0, 2, -5],
+      "scale": 1.0,
+      "color": [0.9, 0.9, 0.1],
+      "material": "plastic",
+      "texture": {
+        "type": 4,
+        "scale": 2.0,
+        "color2": [0.9, 0.7, 0.3]
+      }
+    }
+  ],
+  "lights": [
+    {
+      "pos": [5, 8, 3],
+      "size": 3
+    },
+    {
+      "pos": [-5, 8, -3],
+      "size": 2
+    }
+  ],
+  "floor": {
+    "checkerboard": true,
+    "texture": {
+      "type": 1,
+      "scale": 4.0,
+      "color2": [0.2, 0.2, 0.2]
+    }
+  },
+  "output": "images/scene_texture_demo_final.png",
+  "width": 1024,
+  "height": 768
+}
