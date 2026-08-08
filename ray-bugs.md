@@ -1,0 +1,214 @@
+# jalfern/ray — confirmed bug writeups
+
+Four issues, priority order. Found via V4-Flash (local) + manual review of `renderer.cc` and `shaders.metal`.
+Each notes CPU vs GPU status so you know whether it's a parity bug (backends disagree) or a shared bug (both wrong).
+
+---
+
+## Issue 1 — Sphere emissive lights are ~2× too dark (both backends)
+
+**Severity:** High (silent, affects every scene with an emissive sphere)
+**Files:** `renderer.cc` `sample_emissive_sphere` / `shaders.metal` `sample_emissive_sphere_gpu`
+**Parity:** Shared bug — CPU and GPU agree, so it does NOT show up in a CPU/GPU diff.
+
+### Problem
+`sample_emissive_sphere` samples a point on the **entire** sphere surface uniformly,
+including the hemisphere facing away from the shaded point. The estimator then rejects
+back-facing samples (`if (cos_light <= 0) continue;`) but keeps the full-surface pdf:
+
+```c
+pdf = 1.0f / emissive[ei].area;   // area = 4*pi*r^2  (the WHOLE sphere)
+```
+
+Roughly half the samples are discarded, but the pdf still assumes all of them contribute.
+Net effect: sphere lights come out ~2× dimmer than their `emitted` radiance implies.
+Mesh emissive lights are unaffected (single-sided via the interpolated normal), which is
+what makes the discrepancy easy to spot: a mesh light and a sphere light of equal area and
+equal `emitted` will not match in brightness.
+
+### Fix (either approach)
+- **Cheap:** halve the effective pdf for spheres (`pdf = 1.0f / (0.5f * area)`), acknowledging
+  only the visible hemisphere contributes on average. Approximate but corrects the mean.
+- **Correct:** sample only the hemisphere oriented toward the shaded point, and use that
+  hemisphere's solid-angle pdf. More code, unbiased.
+
+### Verify
+Render one emissive sphere and one emissive mesh (e.g. a quad) with identical area and
+`emitted`. They should read as equally bright. Today the sphere will be visibly darker.
+
+---
+
+## Issue 2 — Glass AND metallic drop ambient + direct lighting on CPU only (backends disagree)
+
+**Severity:** High (visible material difference between `--cpu` and GPU renders)
+**Files:** `renderer.cc` `trace_ray` (glass + metallic paths) vs `shaders.metal` `trace_ray`
+**Parity:** TRUE parity bug — CPU and GPU render glass and metallic differently.
+
+### Problem
+Affects **both** glass and metallic on CPU. Metallic returns pure tinted reflection:
+
+```c
+if (mat == MAT_METALLIC) return (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
+```
+
+and glass computes `base_color = ambient + lit` then **discards it** — the glass return
+is purely reflection + refraction:
+
+```c
+V ambient = mul(sc, 0.15f);
+V base_color = add(ambient, lit);   // built...
+if (mat == MAT_PLASTIC) return base_color;
+if (mat == MAT_SUBSURFACE) return base_color;
+// glass falls through, base_color unused:
+return add(mul(refl_col, fresnel * reflectivity), mul(refr_col, 1.0f - fresnel));
+```
+
+GPU adds it for every non-emissive material, glass included:
+
+```metal
+float3 base = amb + lit;
+accum += base * thru;          // happens before the reflect/refract branch
+```
+
+So a glass surface shows ambient + diffuse + specular + emissive-lit contribution on GPU,
+but only reflection/refraction on CPU. Same scene, two different images.
+
+### Fix
+Pick one and make both match. Physically, pure glass should NOT carry a Lambertian ambient
+term, so the CPU behavior is arguably more correct — in which case remove the
+`base = amb + lit; accum += base` for glass on the GPU side. If you prefer the softer GPU
+look, add `base_color` into the CPU glass return. Either is fine; they just must agree.
+
+### Verify
+Render a glass sphere with `--cpu` and again on GPU. Compare. They currently differ.
+
+---
+
+## Issue 3 — Negative pixel values not clamped before uint8 cast (CPU; GPU TBD)
+
+**Severity:** Medium (produces bright garbage pixels)
+**Files:** `renderer.cc` `render_rows`; GPU status pending `gpu_renderer.mm` check
+**Parity:** CPU confirmed. GPU readback path NOT yet verified — see note.
+
+### Problem
+CPU clamps the top of the range but not the bottom:
+
+```c
+ctx->img->data[idx] = (uint8_t)(fminf(color_avg.x, 1.0f) * 255.0f);
+```
+
+A negative channel (possible via Fresnel-weighted refraction/reflection combos, or tone-map
+on small negatives) casts to `uint8_t` and wraps to a large positive value — a single bright
+garbage pixel.
+
+### Note on GPU
+The Metal kernel writes raw floats with no clamp:
+
+```metal
+out[y * scene.width + x] = tone_map(final, scene.exposure);
+```
+
+Negatives are reportedly caught downstream in `gpu_renderer.mm` (~line 403, clamps both sides).
+**Verify this line before finalizing** — an earlier analysis pass cited a GPU clamp that could
+not be confirmed. If `.mm:403` does clamp, this is a **CPU-only parity bug** (fix the CPU cast).
+If it does NOT, promote to a shared bug and fix both.
+
+### Fix
+```c
+ctx->img->data[idx] = (uint8_t)(fmaxf(0.0f, fminf(color_avg.x, 1.0f)) * 255.0f);
+```
+And confirm the GPU readback clamps too.
+
+---
+
+## Issue 4 — Emissive mesh normal not oriented toward shaded point (both backends)
+
+**Severity:** Medium (mesh lights can go dark depending on OBJ winding/normals)
+**Files:** `renderer.cc` `sample_emissive_mesh` / `shaders.metal` `sample_emissive_mesh_gpu`
+**Parity:** Shared bug — consistent across backends.
+
+### Problem
+The interpolated emissive normal is normalized but never flipped toward the shaded point.
+If the emissive mesh's normals face away from `p`, `cos_light = dot(ln, -wi)` goes negative
+and the sample is rejected (`if (cos_light <= 0) continue;`) even though that surface *is*
+facing and illuminating the point. Result: emissive meshes silently contribute nothing (or
+only from favorably-wound triangles), highly dependent on the OBJ's normal orientation.
+
+### Fix
+After computing the emissive normal, flip it toward the shaded point before the cos test:
+
+```c
+V wi = norm(sub(from, /*sampled point*/ p_light));  // toward the shaded surface
+if (dot(*normal, wi) < 0) *normal = mul(*normal, -1.0f);
+```
+(A single-sided emitter is a valid design choice — but then it should be intentional and
+documented, not an accident of winding.)
+
+### Verify
+Place an emissive mesh light and flip its winding / negate its normals. If brightness changes
+dramatically, the emitter is single-sided by accident.
+
+---
+
+## Issue 5 — Shadow rays don't skip the originating mesh (both backends)
+
+**Severity:** Medium (shadow acne on mesh objects under direct lighting)
+**Files:** `renderer.cc` `in_shadow` (~269–291); same gap in `shaders.metal` `in_shadow`
+**Parity:** Shared bug — both backends.
+
+### Problem
+`in_shadow` takes `skip_sphere` but has **no `skip_mesh` parameter** — the mesh loop skips
+nothing during shadow-ray traversal. When the shaded point is on a mesh, its own triangles can
+self-intersect the shadow ray, producing black acne. Note `emissive_visible` DOES take
+`skip_mesh` and use it, so the fix pattern already exists in the codebase.
+
+The `EPS` origin offset + `t > EPS` in `hit_tri` mitigate most self-hits, which is why acne may
+be mild so far — but grazing angles and thin geometry will still show it.
+
+### Fix
+Add a `skip_mesh` parameter to `in_shadow` (CPU and GPU), pass the hit mesh index from
+`trace_ray`, and skip that mesh (or use `tris[i].mesh_idx == skip_mesh` on GPU) in the loop —
+mirror exactly what `emissive_visible` already does.
+
+---
+
+## Issue 6 — Camera basis collapses when looking straight up/down (both backends)
+
+**Severity:** Low (exact zenith/nadir only) but catastrophic when hit (NaN/Inf whole frame)
+**Files:** `renderer.cc` `setup_context` (~710–712); same in `shaders.metal` camera setup
+**Parity:** Shared bug — both backends.
+
+### Problem
+```c
+ctx->right = norm(cross((V){0,1,0}, ctx->fwd));
+```
+If `fwd` is parallel to the world up `(0,1,0)` — camera pointed exactly at zenith or nadir —
+`cross` returns zero, `norm` divides by zero, and the entire camera basis collapses. All ray
+directions become zero, then `hit_sphere` divides by `dot(d,d) = 0` → NaN/Inf across the frame.
+
+### Fix
+Guard the up reference: if `fabsf(dot(fwd, worldUp))` is near 1, use an alternate up such as
+`(0,0,1)` before the cross. Standard look-at singularity fix.
+
+---
+
+## Scorecard (both V4-Flash passes + manual review)
+
+Consolidated real-bug list: **6.**
+
+| # | Bug | Source | Type |
+|---|-----|--------|------|
+| 1 | Sphere-light ~2× too dark | manual | shared / sampling |
+| 2 | Glass **+ metallic** ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | parity |
+| 3 | CPU missing negative clamp | both | CPU-only parity (pending `.mm:403`) |
+| 4 | Mesh emissive normal not flipped | manual | shared / sampling |
+| 5 | Shadow rays don't skip origin mesh | V4-Flash | shared / missing-guard |
+| 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard |
+
+**What V4-Flash caught:** parity bugs (2, 3) and missing-guard bugs (5, 6) — including two on
+its second pass we did not have (5, 6), and it correctly extended #2 to metallic.
+**What it missed both passes:** the two *sampling-correctness* bugs (1, 4) — where the math is
+internally consistent but wrong, invisible to CPU/GPU diffing.
+**Takeaway:** the model is strong at "these two paths disagree" and "this guard is missing," and
+blind to "this estimator is biased." Model sweeps the whole tree and finds candidates; human
+adjudicates and supplies the sampling-math bugs. The combination beat either alone.
