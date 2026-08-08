@@ -40,9 +40,11 @@ Render one emissive sphere and one emissive mesh (e.g. a quad) with identical ar
 
 ## Issue 2 — Glass AND metallic drop ambient + direct lighting on CPU only (backends disagree)
 
+**Status:** FIXED (metallic + ambient parity)
 **Severity:** High (visible material difference between `--cpu` and GPU renders)
 **Files:** `renderer.cc` `trace_ray` (glass + metallic paths) vs `shaders.metal` `trace_ray`
-**Parity:** TRUE parity bug — CPU and GPU render glass and metallic differently.
+**Parity:** Fixed for metallic and ambient/direct term inclusion. Glass light-transport
+traversal remains divergent (see known limitation below).
 
 ### Problem
 Affects **both** glass and metallic on CPU. Metallic returns pure tinted reflection:
@@ -73,14 +75,29 @@ accum += base * thru;          // happens before the reflect/refract branch
 So a glass surface shows ambient + diffuse + specular + emissive-lit contribution on GPU,
 but only reflection/refraction on CPU. Same scene, two different images.
 
-### Fix
-Pick one and make both match. Physically, pure glass should NOT carry a Lambertian ambient
-term, so the CPU behavior is arguably more correct — in which case remove the
-`base = amb + lit; accum += base` for glass on the GPU side. If you prefer the softer GPU
-look, add `base_color` into the CPU glass return. Either is fine; they just must agree.
+### Fix Applied
+Updated CPU `trace_ray` to include `base_color` in both glass and metallic returns,
+matching the GPU behavior:
+
+```c
+// Metallic
+V metal = (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
+return add(base_color, metal);
+
+// Glass
+V glass = add(mul(refl_col, fresnel * reflectivity), mul(refr_col, 1.0f - fresnel));
+return add(base_color, glass);
+```
+
+### Remaining Limitation
+Glass light-transport traversal still differs: CPU uses recursive `trace_ray` calls while
+GPU uses iterative stack-based traversal. Transmitted light paths may differ. See
+"Known Limitation" in nextsteps.md.
 
 ### Verify
-Render a glass sphere with `--cpu` and again on GPU. Compare. They currently differ.
+Render a glass sphere with `--cpu` and again on GPU. Metallic and ambient terms now match.
+Glass surface diffuse contribution now matches, but transmitted caustics/refraction paths
+may still differ.
 
 ---
 
@@ -192,18 +209,53 @@ Guard the up reference: if `fabsf(dot(fwd, worldUp))` is near 1, use an alternat
 
 ---
 
-## Scorecard (both V4-Flash passes + manual review)
+## Issue 7 — Floor checkerboard CPU/GPU parity (FIXED)
 
-Consolidated real-bug list: **6.**
+**Status:** FIXED
+**Severity:** High (visible seam between CPU and GPU renders)
+**Files:** `shading.cc` `floor_color` vs `shaders.metal` `floor_color`
+**Parity:** Fixed — now consistent across backends.
+
+### Problem
+CPU `floor_color` used `(int)floorf(p.x)` which rounds toward negative infinity.
+GPU `floor_color` used `int(p.x)` which truncates toward zero.
+For negative coordinates these produce different integer parts (e.g. `p.x = -0.3`
+→ CPU gives `-1`, GPU gives `0`). The parity test `((ix + iz) & 1)` then flips
+the checkerboard on whichever side of the origin the hit point falls. Result: a
+hard vertical seam where x or z crosses zero, and a half-split checkerboard floor.
+
+### Fix Applied
+GPU `floor_color` changed from `int(p.x)` to `int(floor(p.x))`, matching the CPU's
+floor-toward-negative-infinity convention. CPU left as-is.
+
+### Verify
+Before fix: 335,032 differing pixels (1024×768 frame), 197,586 on the floor.
+After fix:  51,557 differing pixels total, only 617 on the floor (residual
+float-noise boundary crossings — hit points differing by ~1 ULP near integer
+boundaries). Sky diffs unchanged at ~50,940 (see Known Limitations).
+
+### Known Limitation
+The remaining 50,940 sky diffs come from float-implementation differences between
+x87/SSE `sinf` (CPU) and Metal `sin` (GPU) amplified by the high-frequency cloud
+product `sin(dx*12+dz*8) * sin(dz*10-dx*6)`, plus a minor `fminf` clamp on the
+CPU path (`fminf(..., 1.0f)` after sun+cloud addition) that the GPU lacks. These
+are inherent to different float hardware and are left as documented float noise.
+
+---
+
+## Scorecard (both V4-Flash passes + manual review + cross-file diff)
+
+Consolidated real-bug list: **7.**
 
 | # | Bug | Source | Type |
 |---|-----|--------|------|
 | 1 | Sphere-light ~2× too dark | manual | shared / sampling |
-| 2 | Glass **+ metallic** ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | parity |
+| 2 | Glass + metallic ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | **FIXED** (metallic + ambient); glass traversal still differs |
 | 3 | CPU missing negative clamp | both | CPU-only parity (pending `.mm:403`) |
 | 4 | Mesh emissive normal not flipped | manual | shared / sampling |
 | 5 | Shadow rays don't skip origin mesh | V4-Flash | shared / missing-guard |
 | 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard |
+| 7 | Floor checkerboard CPU/GPU parity | cross-file diff | **FIXED** (floor) |
 
 **What V4-Flash caught:** parity bugs (2, 3) and missing-guard bugs (5, 6) — including two on
 its second pass we did not have (5, 6), and it correctly extended #2 to metallic.

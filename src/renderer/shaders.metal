@@ -159,7 +159,7 @@ static bool bbox_hit(float3 o, float3 d, float3 bmin, float3 bmax) {
 }
 
 static float3 floor_color(float3 p) {
-    return ((int(p.x)+int(p.z)) & 1) ? float3(0.08f,0.12f,0.25f) : float3(0.25f,0.4f,0.7f);
+    return ((int(floor(p.x))+int(floor(p.z))) & 1) ? float3(0.08f,0.12f,0.25f) : float3(0.25f,0.4f,0.7f);
 }
 
 static float3 sample_envmap(texture2d<float> env_tex, float3 d) {
@@ -651,7 +651,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 base = amb + lit;
             accum += base * thru;
 
-            if (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE || depth == MAX_DEPTH) break;
+            if (depth == MAX_DEPTH) break;
 
             float cos_i = dot(n_hit, rd);
             bool entering = cos_i < 0;

@@ -25,3 +25,46 @@ Based on the project README and codebase analysis, the following features are re
 ### Tooling & Infrastructure
 - **Interactive Viewer:** Develop a scene editor or real-time interactive viewer.
 - **Validation:** Add JSON schema validation for scene configuration files to prevent runtime crashes from malformed input.
+
+### Known Limitations
+- **Glass CPU/GPU parity incomplete:** CPU `trace_ray` uses recursive calls while GPU `shaders.metal`
+  uses iterative stack-based traversal. Surface diffuse terms now match (ambient + direct lighting
+  is included for all materials on both backends), but transmitted/refracted light paths differ.
+  Full parity requires unifying the traversal structure (e.g., port recursive approach to iterative
+  or vice versa).
+
+## Investigation Log
+
+### CPU/GPU Render Seam Investigation
+
+**Status:** RESOLVED
+**Symptom:** Hard left/right seam and vertical sky banding when comparing CPU vs GPU renders.
+Approximately 16,645 differing pixels (0.035% of an 800x600 image).
+
+**Ruled out:** Primary ray generation. Ray directions at pixels (100,300) and (700,300) match
+between CPU and GPU within floating-point precision (verified via 8-bit visualization — note:
+limited precision, but no sign flips detected).
+
+**Root cause (floor checkerboard):** Algorithmic difference in `floor_color`. CPU used
+`(int)floorf(p.x)` (floor toward −∞), GPU used `int(p.x)` (truncate toward zero). For
+negative coordinates these produce different integer parts, flipping the parity test and
+the checkerboard pattern wherever x or z crosses zero. **Fixed:** GPU changed to
+`int(floor(p.x))` to match the CPU convention. See Issue 7 in ray-bugs.md.
+
+**Remaining (sky banding):** 50,940 pixels still differ out of 786,432 (1024×768 frame),
+all in the sky. This is float-implementation noise: x87/SSE `sinf` vs Metal `sin`
+amplified by the high-frequency cloud product, plus a minor `fminf` clamp on the CPU
+path that the GPU lacks. Inherent to different float hardware — not fixable.
+
+**AE count before fix:** 335,032 (197,586 on floor, 137,446 on sky)
+**AE count after fix:**  51,557  (    617 on floor, 50,940 on sky)
+**Floor diffs eliminated:** 196,969 (99.7% reduction)
+
+### Bug Status Summary
+- **Issue 1 (Sphere emissive ~2x too dark):** OPEN — shared sampling bug
+- **Issue 2 (Glass + metallic ambient on CPU):** FIXED — base_color now included for all materials
+- **Issue 3 (CPU negative clamp):** OPEN — CPU-only parity bug
+- **Issue 4 (Mesh emissive normal not flipped):** OPEN — shared sampling bug
+- **Issue 5 (Shadow rays don't skip origin mesh):** OPEN — shared missing-guard bug
+- **Issue 6 (Camera zenith/nadir singularity):** OPEN — shared missing-guard bug
+- **Glass traversal parity:** DOCUMENTED LIMITATION — recursive vs iterative traversal

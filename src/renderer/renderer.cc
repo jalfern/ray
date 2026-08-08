@@ -500,7 +500,10 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                            lights, num_lights, emissive, num_emissive,
                            sample_idx, env);
 
-    if (mat == MAT_METALLIC) return (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
+    if (mat == MAT_METALLIC) {
+        V metal = (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
+        return add(base_color, metal);
+    }
 
     float reflectivity = sphere_ref;
     float ior = sphere_ior;
@@ -526,7 +529,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     r0 = r0 * r0;
     float fresnel = r0 + (1.0f - r0) * powf(1.0f - cos_i, 5.0f);
 
-    return add(mul(refl_col, fresnel * reflectivity), mul(refr_col, 1.0f - fresnel));
+    V glass = add(mul(refl_col, fresnel * reflectivity), mul(refr_col, 1.0f - fresnel));
+    return add(base_color, glass);
 }
 
 typedef struct {
