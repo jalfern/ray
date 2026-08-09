@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant float EPS = 1e-4f;
-constant int AA_SAMPLES = 4;
+constant int AA_SAMPLES = 16;
 constant int MAX_DEPTH = 4;
 
 constant int MAT_GLASS = 0;
@@ -545,7 +545,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     if (emissive[ei].type == 0) {
                         lp = sample_emissive_sphere_gpu(emissive[ei].c, emissive[ei].r, ln, sample_idx, ei);
                         ldist = length(lp - p);
-                        pdf = 1.0f / emissive[ei].area;
+                        pdf = 2.0f / emissive[ei].area;
                     } else {
                         lp = sample_emissive_mesh_gpu(tris, emissive_cdf,
                                                        emissive[ei].tri_start, emissive[ei].tri_end,
@@ -559,7 +559,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     if (cos_surf <= 0) continue;
                     float cos_light = max(0.0f, dot(ln, -wi));
                     if (cos_light <= 0) continue;
-                    float G = cos_surf * cos_light / (ldist * ldist);
+                    float G = cos_surf * cos_light / fmax(ldist * ldist, 1e-3f);
                     int skip_sphere = emissive[ei].type == 0 ? emissive[ei].src_idx : -1;
                     int skip_mesh = emissive[ei].type == 1 ? emissive[ei].src_idx : -1;
                     bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sphere,
@@ -623,7 +623,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     skip_sph = emissive[ei].src_idx;
                     lp = sample_emissive_sphere_gpu(emissive[ei].c, emissive[ei].r, ln, sample_idx, ei);
                     ldist = length(lp - p);
-                    pdf = 1.0f / emissive[ei].area;
+                    pdf = 2.0f / emissive[ei].area;
                 } else {
                     int mesh_idx = emissive[ei].src_idx;
                     if (hit_type == 2 && tris[mi].mesh_idx == mesh_idx) continue;
@@ -640,7 +640,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 if (cos_surf <= 0) continue;
                 float cos_light = max(0.0f, dot(ln, -wi));
                 if (cos_light <= 0) continue;
-                float G = cos_surf * cos_light / (ldist * ldist);
+                float G = cos_surf * cos_light / fmax(ldist * ldist, 1e-3f);
                 bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sph,
                                                   tris, tc, bvh, nb, skip_mesh);
                 if (vis) {

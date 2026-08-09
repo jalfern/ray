@@ -12,7 +12,7 @@
 #include <float.h>
 
 #define EPS 1e-4f
-#define AA_SAMPLES 4
+#define AA_SAMPLES 16
 #define MAX_DEPTH 4
 
 static int mat_name_to_type(const char* name) {
@@ -375,7 +375,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                 lp = sample_emissive_sphere(emissive[ei].c, emissive[ei].r, &ln, sample_idx, ei);
                 V dl = sub(lp, p);
                 ldist = sqrtf(dot(dl, dl));
-                pdf = 1.0f / emissive[ei].area;
+                pdf = 2.0f / emissive[ei].area;
             } else {
                 lp = sample_emissive_mesh(emissive[ei].tris, emissive[ei].tri_cdf,
                                            emissive[ei].num_tris, emissive[ei].total_area,
@@ -388,7 +388,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             if (cos_surf <= 0) continue;
             float cos_light = fmaxf(0.0f, dot(ln, mul(wi, -1)));
             if (cos_light <= 0) continue;
-            float G = cos_surf * cos_light / (ldist * ldist);
+            float G = cos_surf * cos_light / fmaxf(ldist * ldist, 1e-3f);
             int vis = emissive_visible(p, lp, ldist, spheres, num_spheres,
                                         meshes, num_meshes,
                                         emissive[ei].type == 0 ? emissive[ei].src_idx : -1,
@@ -455,7 +455,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             lp = sample_emissive_sphere(emissive[ei].c, emissive[ei].r, &ln, sample_idx, ei);
             V dl = sub(lp, p);
             ldist = sqrtf(dot(dl, dl));
-            pdf = 1.0f / emissive[ei].area;
+            pdf = 2.0f / emissive[ei].area;
         } else {
             int emi = emissive[ei].src_idx;
             if (hit_type == 2 && mi == emi) continue;
@@ -472,7 +472,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (cos_surf <= 0) continue;
         float cos_light = fmaxf(0.0f, dot(ln, mul(wi, -1)));
         if (cos_light <= 0) continue;
-        float G = cos_surf * cos_light / (ldist * ldist);
+        float G = cos_surf * cos_light / fmaxf(ldist * ldist, 1e-3f);
         int vis = emissive_visible(p, lp, ldist, spheres, num_spheres,
                                     meshes, num_meshes, skip_sph, skip_mesh);
         if (vis) {
