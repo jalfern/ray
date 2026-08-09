@@ -5,8 +5,9 @@ Each notes CPU vs GPU status so you know whether it's a parity bug (backends dis
 
 ---
 
-## Issue 1 — Sphere emissive lights are ~2× too dark (both backends)
+## Issue 1 — Sphere emissive lights are ~2× too dark (both backends) — FIXED
 
+**Status:** FIXED
 **Severity:** High (silent, affects every scene with an emissive sphere)
 **Files:** `renderer.cc` `sample_emissive_sphere` / `shaders.metal` `sample_emissive_sphere_gpu`
 **Parity:** Shared bug — CPU and GPU agree, so it does NOT show up in a CPU/GPU diff.
@@ -26,15 +27,18 @@ Mesh emissive lights are unaffected (single-sided via the interpolated normal), 
 what makes the discrepancy easy to spot: a mesh light and a sphere light of equal area and
 equal `emitted` will not match in brightness.
 
-### Fix (either approach)
-- **Cheap:** halve the effective pdf for spheres (`pdf = 1.0f / (0.5f * area)`), acknowledging
-  only the visible hemisphere contributes on average. Approximate but corrects the mean.
-- **Correct:** sample only the hemisphere oriented toward the shaded point, and use that
-  hemisphere's solid-angle pdf. More code, unbiased.
+### Fix Applied
+Sphere emissive pdf changed from `1/(4πr²)` to `2/(4πr²)` to compensate for
+far-hemisphere rejection. Additionally, the geometry term `1/dist²` is now clamped
+via `fmaxf(ldist * ldist, 1e-3f)` to prevent fireflies when the emitter nearly
+touches another surface. Both backends. Commit `4f1337d`.
+
+**Tunable:** the clamp threshold `1e-3` caps G at 1000 (when both cosines = 1).
+If fireflies persist in close-contact scenes, reduce this value (e.g. `1e-2`).
 
 ### Verify
 Render one emissive sphere and one emissive mesh (e.g. a quad) with identical area and
-`emitted`. They should read as equally bright. Today the sphere will be visibly darker.
+`emitted`. They should read as equally bright. The sphere should no longer be darker.
 
 ---
 
@@ -245,17 +249,17 @@ are inherent to different float hardware and are left as documented float noise.
 
 ## Scorecard (both V4-Flash passes + manual review + cross-file diff)
 
-Consolidated real-bug list: **7.**
+Consolidated real-bug list: **7** (3 fixed, 4 open).
 
-| # | Bug | Source | Type |
-|---|-----|--------|------|
-| 1 | Sphere-light ~2× too dark | manual | shared / sampling |
-| 2 | Glass + metallic ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | **FIXED** (metallic + ambient); glass traversal still differs |
-| 3 | CPU missing negative clamp | both | CPU-only parity (pending `.mm:403`) |
-| 4 | Mesh emissive normal not flipped | manual | shared / sampling |
-| 5 | Shadow rays don't skip origin mesh | V4-Flash | shared / missing-guard |
-| 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard |
-| 7 | Floor checkerboard CPU/GPU parity | cross-file diff | **FIXED** (floor) |
+| # | Bug | Source | Type | Status |
+|---|-----|--------|------|--------|
+| 1 | Sphere-light ~2× too dark | manual | shared / sampling | **FIXED** |
+| 2 | Glass + metallic ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | shared / dropped-term | **FIXED** |
+| 3 | CPU missing negative clamp | both | CPU-only parity (pending `.mm:403`) | open |
+| 4 | Mesh emissive normal not flipped | manual | shared / sampling | open |
+| 5 | Shadow rays don't skip origin mesh | V4-Flash | shared / missing-guard | open |
+| 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard | open |
+| 7 | Floor checkerboard CPU/GPU parity | cross-file diff | shared / float-conv | **FIXED** |
 
 **What V4-Flash caught:** parity bugs (2, 3) and missing-guard bugs (5, 6) — including two on
 its second pass we did not have (5, 6), and it correctly extended #2 to metallic.
