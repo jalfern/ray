@@ -1,0 +1,72 @@
+{
+  "camera": {"pos": [0, 3.5, 14.5], "target": [0, 2.5, 0], "aperture": 0.35, "focus_dist": 14.5},
+
+  "width": 1920,
+  "height": 1080,
+  "exposure": 2.0,
+
+  "environment": {"file": "../envmaps/polyhaven_haven_01_1k.hdr", "intensity": 1.0},
+
+  "meshes": [
+    {
+      "file": "../models/armadillo.obj",
+      "pos": [0, 6.506, 0],
+      "scale": 0.12,
+      "color": [0.85, 0.9, 1.0],
+      "material": "glass",
+      "reflectivity": 0.1,
+      "ior": 1.5
+    },
+    {
+      "file": "../models/suzanne2.obj",
+      "pos": [-7, 6.0, -2],
+      "scale": 4.0,
+      "color": [1.0, 0.85, 0.4],
+      "material": "metallic",
+      "reflectivity": 0.9,
+      "ior": 0.5
+    },
+    {
+      "file": "../models/teapot_uv.obj",
+      "pos": [7, 6.3, -2],
+      "scale": 0.8,
+      "color": [0.2, 0.7, 0.9],
+      "material": "plastic",
+      "reflectivity": 0.1,
+      "texture": {"type": "checker", "scale": 4.0, "color2": [0.05, 0.15, 0.3]}
+    }
+  ],
+
+  "spheres": [
+    {"pos": [-9, 2, -8], "radius": 2.0, "reflectivity": 0.1, "color": [0.2, 1.0, 0.4], "material": "plastic"},
+    {"pos": [-4.5, 2, -9], "radius": 2.0, "reflectivity": 0.1, "ior": 1.5, "color": [0.9, 0.95, 1.0], "material": "glass"},
+    {"pos": [0, 2, -10], "radius": 2.0, "reflectivity": 0.1, "color": [0.6, 0.9, 1.0], "material": "subsurface"},
+    {"pos": [4.5, 2, -9], "radius": 2.0, "reflectivity": 0.9, "ior": 0.5, "color": [0.95, 0.6, 0.9], "material": "metallic"},
+    {"pos": [9, 2, -8], "radius": 2.0, "reflectivity": 0.1, "color": [1.0, 0.9, 0.7], "material": "plastic",
+     "texture": {"type": "marble", "scale": 3.0, "color2": [0.6, 0.3, 0.1]}},
+
+    {"pos": [-3, 0.7, 8], "radius": 0.7, "reflectivity": 0.1, "ior": 1.5, "color": [1.0, 0.95, 0.9], "material": "glass"},
+    {"pos": [3, 0.7, 9], "radius": 0.7, "reflectivity": 0.1, "ior": 1.5, "color": [0.9, 1.0, 0.95], "material": "glass"},
+
+    {"pos": [-4, 5, -2], "radius": 1.5, "reflectivity": 0.0, "color": [1.0, 0.5, 0.2], "material": "emissive"},
+    {"pos": [9, 5, 0], "radius": 1.2, "reflectivity": 0.0, "color": [0.3, 0.5, 1.0], "material": "emissive"}
+  ],
+
+  "lights": [
+    {"pos": [0, 14, 6], "size": 4}
+  ],
+
+  "floor": {"checkerboard": true},
+
+  "animation": {
+    "duration": 5,
+    "fps": 24,
+    "orbit": {
+      "center": [0, 2.5, 0],
+      "radius": 14.5,
+      "height": 3.5
+    }
+  },
+
+  "output": "videos/showcase.mp4"
+}
