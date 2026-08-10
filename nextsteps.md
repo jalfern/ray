@@ -15,7 +15,7 @@ Based on the project README and codebase analysis, the following features are re
 - **Textures & UV Mapping:** Utilize existing UV data from the OBJ parser to implement proper texture mapping.
 - **GPU Animation Fix:** Resolve the issue where animations currently fall back to CPU even when GPU is available.
 - **glTF Extensions:** Add support for KHR_materials_transmission (glass), KHR_materials_ior, and punctual lights (KHR_lights_punctual). Currently the importer skips all extensions with a warning.
-- **glTF Mesh Emission:** Emissive meshes from glTF are imported but the renderer's emissive surface setup (EmissiveSurf) is only populated by the native JSON path — glTF emissive materials aren't wired into the emissive BVH yet, so they illuminate via direct sampling only.
+- **glTF Mesh Emission:** Emissive meshes from glTF are imported and correctly wired into the renderer's EmissiveSurf BVH — the renderer iterates all scene meshes regardless of source, so glTF emissive materials work identically to native JSON path emissive meshes.
 
 ### Rendering Enhancements
 - **Area Lights:** Implement softer, more realistic shadows.
@@ -66,8 +66,8 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 - **Issue 1 (Sphere emissive ~2x too dark):** FIXED — pdf doubled, geometry term clamped
 - **Issue 2 (Glass + metallic ambient on CPU):** FIXED — base_color now included for all materials
 - **Issue 3 (CPU negative clamp):** OPEN — CPU-only parity bug
-- **Issue 4 (Mesh emissive normal not flipped):** OPEN — shared sampling bug
-- **Issue 5 (Shadow rays don't skip origin mesh):** OPEN — shared missing-guard bug
+- **Issue 4 (Mesh emissive normal not flipped):** FIXED — shared sampling bug, normal now flipped toward shaded point
+- **Issue 5 (Shadow rays don't skip origin mesh):** FIXED — shared missing-guard bug, skip_mesh parameter added to in_shadow on both backends
 - **Issue 6 (Camera zenith/nadir singularity):** OPEN — shared missing-guard bug
 - **Glass traversal parity:** DOCUMENTED LIMITATION — recursive vs iterative traversal
 
@@ -80,4 +80,4 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
   - Node hierarchy traversal with TRS/matrix accumulation
   - Integrated into parser.cc via "gltf" scene key
 - **Tested with:** Box, Triangle, Suzanne, Avocado, BoomBox, Lantern, WaterBottle
-- **Known gaps:** Extensions skipped (glass/transmission), punctual lights not imported, emissive surfaces not wired into renderer's EmissiveSurf BVH
+- **Known gaps:** Extensions skipped (glass/transmission), punctual lights not imported

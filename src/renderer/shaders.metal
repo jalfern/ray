@@ -199,7 +199,7 @@ static bool in_shadow(float3 p, LightGpu light,
                       device const SphereGpu* spheres, int sc,
                       device const TriGpu* tris, int tc,
                       device const BvhNode* bvh, int nb,
-                      int sample_idx, int origin) {
+                      int sample_idx, int origin, int skip_mesh) {
     float3 lp = area_light_sample(light.pos, light.size, sample_idx);
     float3 tl = lp - p;
     float ld = length(tl);
@@ -225,6 +225,7 @@ static bool in_shadow(float3 p, LightGpu light,
                 stk[sp++] = node.right;
             } else {
                 for (int i = node.tri_start; i < node.tri_end; i++) {
+                    if (skip_mesh >= 0 && tris[i].mesh_idx == skip_mesh) continue;
                     float t, u, v;
                     if (hit_tri(ro, rd, tris[i].v0, tris[i].v1, tris[i].v2, t, u, v) &&
                         t < ld && t > EPS)
@@ -273,6 +274,9 @@ static float3 sample_emissive_mesh_gpu(device const TriGpu* tris, device const f
     float3 p = v0 + su * (v1 - v0) + sv * (v2 - v0);
     float w = 1.0f - su - sv;
     float3 n = normalize(w * tris[ti].n0 + su * tris[ti].n1 + sv * tris[ti].n2);
+    /* Flip normal toward the shaded point so winding doesn't silently kill emission. */
+    float3 to_p = normalize(from - p);
+    if (dot(n, to_p) < 0) n = -n;
     normal = n;
     dist = length(p - from);
     return p;
@@ -534,7 +538,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 for (int li = 0; li < nl; li++) {
                     float3 ld = normalize(lights[li].pos - p);
                     int sidx = (sample_idx << 2) | li;
-                    bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb, sidx, -1);
+                    bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb, sidx, -1, -1);
                     float diff = max(0.0f, dot(nf, ld));
                     float lf = sh ? 0.2f : 1.0f;
                     lit += fl * diff * lf;
@@ -595,7 +599,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 float3 ld = normalize(lights[li].pos - p);
                 int sidx = (sample_idx << 2) | li;
                 bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
-                                    sidx, hit_type == 1 ? si : -1);
+                                    sidx, hit_type == 1 ? si : -1,
+                                    hit_type == 2 ? mi : -1);
 
                 float diff = max(0.0f, dot(n_hit, ld));
                 float3 vw = normalize(ro - p);

@@ -235,6 +235,9 @@ static V sample_emissive_mesh(TriGpu* tris, float* tri_cdf, int num_tris, float 
     float len = sqrtf(nx*nx + ny*ny + nz*nz);
     if (len > 1e-8f) { nx /= len; ny /= len; nz /= len; }
     *normal = (V){nx, ny, nz};
+    /* Flip normal toward the shaded point so winding doesn't silently kill emission. */
+    V to_p = norm(sub(from, (V){px, py, pz}));
+    if (dot(*normal, to_p) < 0) *normal = mul(*normal, -1);
 
     V to = sub((V){px, py, pz}, from);
     *out_dist = sqrtf(dot(to, to));
@@ -267,7 +270,8 @@ static int emissive_visible(V p, V light_pos, float light_dist,
 }
 
 static float in_shadow(V p, LightData light, SphereData* spheres, int num_spheres,
-                       MeshObjData* meshes, int num_meshes, int sample_idx, int skip_sphere) {
+                       MeshObjData* meshes, int num_meshes, int sample_idx,
+                       int skip_sphere, int skip_mesh) {
     V light_pos = area_light_sample(light.pos, light.size, sample_idx);
     V to_light = sub(light_pos, p);
     float light_dist = sqrtf(dot(to_light, to_light));
@@ -282,6 +286,7 @@ static float in_shadow(V p, LightData light, SphereData* spheres, int num_sphere
         }
     }
     for (int m = 0; m < num_meshes; m++) {
+        if (m == skip_mesh) continue;
         if (meshes[m].num_bvh_nodes > 0 &&
             hit_mesh_bvh_any(ray_o, ray_dir, light_dist,
                              meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes))
@@ -363,7 +368,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             V light_dir = norm(sub(light_pos, p));
             int sidx = (sample_idx << 2) | li;
             float sf = in_shadow(p, lights[li], spheres, num_spheres,
-                                 meshes, num_meshes, sidx, -1);
+                                 meshes, num_meshes, sidx, -1, -1);
             float diff = fmaxf(0.0f, dot(n_floor, light_dir));
             float lf = sf ? 0.2f : 1.0f;
             lit = add(lit, mul(base, diff * lf));
@@ -423,7 +428,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         int sidx = (sample_idx << 2) | li;
         float sf = in_shadow(p, lights[li], spheres, num_spheres,
                              meshes, num_meshes, sidx,
-                             hit_type == 1 ? si : -1);
+                             hit_type == 1 ? si : -1,
+                             hit_type == 2 ? mi : -1);
 
         float diff = fmaxf(0.0f, dot(n, light_dir));
         V view = norm(sub(o, p));
