@@ -1,0 +1,15 @@
+{
+  "camera": {"pos": [0, 0, 0], "target": [0, 10, 0]},
+  "lights": [
+    {"pos": [5, 10, 5], "size": 4}
+  ],
+  "spheres": [
+    {"pos": [0, 5, 0], "radius": 1, "material": "plastic", "color": [0.2, 0.6, 1.0]},
+    {"pos": [-2, 3, 0], "radius": 0.5, "material": "glass", "color": [1, 1, 1], "reflectivity": 0.1, "ior": 1.5},
+    {"pos": [2, 4, 0], "radius": 0.7, "material": "metallic", "color": [1, 0.8, 0.2], "reflectivity": 0.9}
+  ],
+  "floor": {"checkerboard": true},
+  "output": "images/test_zenith.png",
+  "width": 800,
+  "height": 600
+}

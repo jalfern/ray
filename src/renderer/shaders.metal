@@ -728,7 +728,10 @@ kernel void rk(
     if (x >= scene.width || y >= scene.height) return;
 
     float3 fwd = normalize(cam.target - cam.pos);
-    float3 right = normalize(cross(float3(0.0f, 1.0f, 0.0f), fwd));
+    float3 world_up = float3(0.0f, 1.0f, 0.0f);
+    if (fabs(dot(world_up, fwd)) > 0.999f)
+        world_up = float3(0.0f, 0.0f, 1.0f);
+    float3 right = normalize(cross(world_up, fwd));
     float3 up = cross(fwd, right);
     float asp = (float)scene.width / (float)scene.height;
 

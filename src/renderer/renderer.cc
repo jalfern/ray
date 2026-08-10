@@ -718,7 +718,10 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.emissive = emissive;
 
     ctx.fwd = norm(sub(tgt, ctx.cam));
-    ctx.right = norm(cross((V){0,1,0}, ctx.fwd));
+    V world_up = (V){0, 1, 0};
+    if (fabsf(dot(world_up, ctx.fwd)) > 0.999f)
+        world_up = (V){0, 0, 1};
+    ctx.right = norm(cross(world_up, ctx.fwd));
     ctx.up = cross(ctx.fwd, ctx.right);
     ctx.asp = (float)scene->width / scene->height;
     ctx.exposure = scene->exposure;
