@@ -1317,7 +1317,7 @@ static void build_gltf_scene(
                 } else if (transmission > 0.0f) {
                     strcpy(mo->material, "glass");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
-                    mo->reflectivity = 0.0f;
+                    mo->reflectivity = 1.0f;
                     mo->ior = ior;
                 } else if (metallic > 0.5f) {
                     strcpy(mo->material, "metallic");
