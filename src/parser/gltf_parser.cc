@@ -799,6 +799,8 @@ typedef struct {
     float metallic;
     float roughness;
     float emissive[3];
+    float transmission;    /* 0-1, default 0 */
+    float ior;             /* 1.0-3.0, default 1.5 */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1076,6 +1078,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].base_color[2] = 1.0f;
         mats[n].base_color[3] = 1.0f;
         mats[n].metallic = 1.0f;
+        mats[n].ior = 1.5f;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1114,6 +1117,67 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                 obj = p;
             } else if (strcmp(kbuf, "emissiveFactor") == 0) {
                 parse_float_array(&obj, mats[n].emissive, 3);
+            } else if (strcmp(kbuf, "extensions") == 0) {
+                const char* ex = obj;
+                skip_ws_ptr(&ex);
+                if (*ex == '{') ex++;
+                while (*ex && *ex != '}') {
+                    char ek[64];
+                    const char* esave = ex;
+                    if (!parse_json_string(&ex, ek, sizeof(ek))) { ex = esave; skip_value(&ex); continue; }
+                    skip_ws_ptr(&ex);
+                    if (*ex == ':') ex++;
+                    skip_ws_ptr(&ex);
+                    if (strcmp(ek, "KHR_materials_transmission") == 0) {
+                        const char* tx = ex;
+                        skip_ws_ptr(&tx);
+                        if (*tx == '{') tx++;
+                        while (*tx && *tx != '}') {
+                            char tk[64];
+                            const char* tsave = tx;
+                            if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ':') tx++;
+                            skip_ws_ptr(&tx);
+                            if (strcmp(tk, "transmissionFactor") == 0) {
+                                float fv; if (parse_json_number(&tx, &fv)) mats[n].transmission = fv;
+                            } else {
+                                skip_value(&tx);
+                            }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ',') tx++;
+                        }
+                        if (*tx == '}') tx++;
+                        ex = tx;
+                    } else if (strcmp(ek, "KHR_materials_ior") == 0) {
+                        const char* ix = ex;
+                        skip_ws_ptr(&ix);
+                        if (*ix == '{') ix++;
+                        while (*ix && *ix != '}') {
+                            char ik[64];
+                            const char* isave = ix;
+                            if (!parse_json_string(&ix, ik, sizeof(ik))) { ix = isave; skip_value(&ix); continue; }
+                            skip_ws_ptr(&ix);
+                            if (*ix == ':') ix++;
+                            skip_ws_ptr(&ix);
+                            if (strcmp(ik, "ior") == 0) {
+                                float fv; if (parse_json_number(&ix, &fv)) mats[n].ior = fv;
+                            } else {
+                                skip_value(&ix);
+                            }
+                            skip_ws_ptr(&ix);
+                            if (*ix == ',') ix++;
+                        }
+                        if (*ix == '}') ix++;
+                        ex = ix;
+                    } else {
+                        skip_value(&ex);
+                    }
+                    skip_ws_ptr(&ex);
+                    if (*ex == ',') ex++;
+                }
+                if (*ex == '}') ex++;
+                obj = ex;
             } else {
                 skip_value(&obj);
             }
@@ -1234,10 +1298,14 @@ static void build_gltf_scene(
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
                 float metallic = 0.0f;
                 float emissive[3] = {0, 0, 0};
+                float transmission = 0.0f;
+                float ior = 1.5f;
                 if (mat_idx >= 0 && mat_idx < num_materials) {
                     memcpy(base_color, materials[mat_idx].base_color, 4 * sizeof(float));
                     metallic = materials[mat_idx].metallic;
                     memcpy(emissive, materials[mat_idx].emissive, 3 * sizeof(float));
+                    transmission = materials[mat_idx].transmission;
+                    ior = materials[mat_idx].ior;
                 }
 
                 /* Classify material. */
@@ -1246,6 +1314,11 @@ static void build_gltf_scene(
                     strcpy(mo->material, "emissive");
                     mo->color = (Vec3){emissive[0], emissive[1], emissive[2]};
                     mo->reflectivity = 0.0f;
+                } else if (transmission > 0.0f) {
+                    strcpy(mo->material, "glass");
+                    mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
+                    mo->reflectivity = 0.0f;
+                    mo->ior = ior;
                 } else if (metallic > 0.5f) {
                     strcpy(mo->material, "metallic");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
@@ -1255,7 +1328,6 @@ static void build_gltf_scene(
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = metallic;
                 }
-                mo->ior = 1.5f;
 
                 /* Count triangles for this material group. */
                 int total_tris = 0;

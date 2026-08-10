@@ -1,0 +1,12 @@
+{
+  "camera": {"pos": [2, 1.5, 4], "target": [0, 1, 0]},
+  "gltf": "Lantern.gltf",
+  "lights": [
+    {"pos": [3, 5, 5], "size": 2},
+    {"pos": [-2, 3, 3], "size": 1}
+  ],
+  "floor": true,
+  "output": "images/test_lantern.png",
+  "width": 800,
+  "height": 600
+}

@@ -1,0 +1,12 @@
+{
+  "camera": {"pos": [0.15, 0.1, 0.4], "target": [0, 0.1, 0]},
+  "gltf": "WaterBottle.gltf",
+  "lights": [
+    {"pos": [0.5, 0.5, 0.5], "size": 0.2},
+    {"pos": [-0.3, 0.3, -0.3], "size": 0.15}
+  ],
+  "floor": true,
+  "output": "images/test_waterbottle.png",
+  "width": 800,
+  "height": 600
+}
