@@ -37,24 +37,41 @@ make test     # Render all test scenes
 └── tools/               # Mesh generators (torus, ico sphere, vase)
 ```
 
-## Architecture
+## Features
 
-- **parser/** - JSON scene parsing → `Scene` struct
-- **renderer/** - Ray tracing core → `Image` struct
-- **output/** - PPM/PNG writers
-- **vector/** - 3D vector math operations
+| Feature | Status |
+|---------|--------|
+| CPU + Metal GPU backends | Done |
+| BVH-accelerated mesh rendering | Done |
+| Spheres, meshes, infinite floor | Done |
+| Materials: plastic, metallic, glass, emissive, subsurface | Done |
+| Texture mapping (procedural: checker, polka, marble, rings) | Done |
+| UV-mapped textures (OBJ + glTF path) | Done |
+| Area light sampling (point lights with size) | Done |
+| Emissive sphere + mesh lights | Done |
+| Depth of field | Done |
+| HDR environment maps | Done |
+| Denoiser | Done |
+| Animation (orbit camera) | Done |
+| **glTF 2.0 importer** (core spec) | Done |
+| Punctual lights from glTF (KHR_lights_punctual) | — |
+| Transmission / IOR from glTF (KHR_materials_transmission/ior) | — |
+
+## Known Bugs
+
+- **Issue 3:** CPU render output not clamped to [0,1] before uint8 cast — negative values wrap to bright garbage pixels (CPU-only)
+- **Issue 6:** Camera basis collapses when looking straight up/down — zenith/nadir singularity (both backends)
+- **Glass traversal parity:** CPU uses recursive tracing, GPU uses iterative stack — transmitted light paths can diverge
 
 ## Next Steps
 
-- **BVH acceleration** — mesh rendering will slow down with more complex OBJs
-- **Textures/UV mapping** — OBJ parser already reads UVs but they're unused
-- **Area lights** — softer, more realistic shadows
-- **GPU animation** — currently animation falls back to CPU even with GPU available
-- **More materials** — emissive, metallic, subsurface scattering
-- **Depth of field / motion blur**
-- **Skybox / environment maps**
-- **Normal mapping**
-- **Emissive objects / mesh lights**
-- **Scene editor / interactive viewer**
-- **Refraction fix for glass meshes** — entering/exiting IOR regions only handled for spheres
-- **JSON schema validation**
+### Short term
+- **glTF extensions:** KHR_materials_transmission (glass), KHR_materials_ior, KHR_lights_punctual
+- **Fix remaining bugs:** CPU negative clamp, camera zenith/nadir singularity
+- **Normal mapping** for increased surface detail
+
+### Longer term
+- **True area lights** — softer, more realistic shadows
+- **GPU animation** — currently falls back to CPU
+- **JSON schema validation** for scene files
+- **Interactive viewer**
