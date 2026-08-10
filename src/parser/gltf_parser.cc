@@ -1009,9 +1009,10 @@ static int parse_scenes(const char** j, int* root_nodes, int max_root) {
     skip_ws_ptr(&cur);
     if (*cur != '[') return 0;
     cur++;
-    int n = 0;
+    int ri = 0;
     /* We only care about the first scene (index 0). */
-    while (*cur && *cur != ']' && n < 1) {
+    int scene_count = 0;
+    while (*cur && *cur != ']' && scene_count < 1) {
         skip_ws_ptr(&cur);
         if (*cur == ']') break;
         if (*cur != '{') { skip_value(&cur); continue; }
@@ -1029,7 +1030,6 @@ static int parse_scenes(const char** j, int* root_nodes, int max_root) {
                 const char* arr = obj;
                 skip_ws_ptr(&arr);
                 if (*arr == '[') arr++;
-                int ri = 0;
                 while (*arr && *arr != ']' && ri < max_root) {
                     skip_ws_ptr(&arr);
                     if (*arr == ']') break;
@@ -1049,13 +1049,13 @@ static int parse_scenes(const char** j, int* root_nodes, int max_root) {
         }
         if (*obj == '}') obj++;
         cur = obj;
-        n++;
+        scene_count++;
         skip_ws_ptr(&cur);
         if (*cur == ',') cur++;
     }
     if (*cur == ']') cur++;
     *j = cur;
-    return n;
+    return ri;
 }
 
 /* ── Parse the materials array ───────────────────────────────── */
@@ -1189,6 +1189,7 @@ static void build_gltf_scene(
         m4_identity(stack_mats[stack_top]);
         stack_top++;
     }
+
 
     while (stack_top > 0) {
         stack_top--;

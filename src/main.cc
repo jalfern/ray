@@ -112,7 +112,6 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to parse scene file: %s\n", scene_file);
         return 1;
        }
-
     if (scene->has_animation) {
         render_animation(scene);
         free_scene(scene);

@@ -63,7 +63,7 @@ struct TriRef {
 };
 
 static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
-                       TriGpu* tris, std::vector<TriRef>& refs, int start, int end) {
+                       TriGpu* tris, std::vector<TriRef>& refs, int start, int end, int depth) {
     if (node_count >= max_nodes) {
         fprintf(stderr, "[bvh] warning: node buffer overflow (%d >= %d), aborting build\n",
                 node_count, max_nodes);
@@ -196,6 +196,14 @@ static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
             left++; right--;
         }
         mid = left;
+        /* Guard against degenerate splits: if one side is empty or
+         * depth is too high, force a balanced median split instead. */
+        if (mid == start || mid == end || depth > 64) {
+            std::sort(refs.begin() + start, refs.begin() + end, [axis](const TriRef& a, const TriRef& b) {
+                return a.c[axis] < b.c[axis];
+            });
+            mid = (start + end) / 2;
+        }
     } else {
         // Fallback: median split with sort
         std::sort(refs.begin() + start, refs.begin() + end, [axis](const TriRef& a, const TriRef& b) {
@@ -206,8 +214,8 @@ static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
 
     nodes[node_idx].tri_start = -1;
     nodes[node_idx].tri_end = -1;
-    int left_idx  = build_rec(nodes, node_count, max_nodes, tris, refs, start, mid);
-    int right_idx = build_rec(nodes, node_count, max_nodes, tris, refs, mid, end);
+    int left_idx  = build_rec(nodes, node_count, max_nodes, tris, refs, start, mid, depth + 1);
+    int right_idx = build_rec(nodes, node_count, max_nodes, tris, refs, mid, end, depth + 1);
     if (left_idx < 0 || right_idx < 0) return -1;
     nodes[node_idx].left  = left_idx;
     nodes[node_idx].right = right_idx;
@@ -225,7 +233,7 @@ int bvh_build(BvhNode* nodes, int max_nodes, TriGpu* tris, int num_tris) {
      }
 
     int node_count = 0;
-    int rc = build_rec(nodes, node_count, max_nodes, tris, refs, 0, num_tris);
+    int rc = build_rec(nodes, node_count, max_nodes, tris, refs, 0, num_tris, 0);
     if (rc < 0) return 0;
 
     // Reorder triangles so leaf ranges are contiguous in the triangle array.
