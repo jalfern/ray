@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "obj_parser.h"
+#include "gltf_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -463,6 +464,32 @@ Scene* parse_scene(const char* filename) {
         } else if (strcmp(key, "meshes") == 0) {
             p = parse_meshes_array(p, scene, scene_dir);
             if (!p) PARSE_FAIL;
+        } else if (strcmp(key, "gltf") == 0) {
+            char gltf_path[512];
+            p = parse_string(p, gltf_path, sizeof(gltf_path));
+            if (!p) PARSE_FAIL;
+            char full_path[1024];
+            if (gltf_path[0] && gltf_path[0] != '/') {
+                snprintf(full_path, sizeof(full_path), "%s/%s", scene_dir, gltf_path);
+            } else {
+                strncpy(full_path, gltf_path, sizeof(full_path) - 1);
+            }
+            GltfScene gs;
+            memset(&gs, 0, sizeof(gs));
+            if (load_gltf(full_path, &gs) == 0 && gs.num_meshes > 0) {
+                scene->meshes = gs.meshes;
+                scene->num_meshes = gs.num_meshes;
+                gs.meshes = NULL;
+                gs.num_meshes = 0;
+                /* Only override camera if glTF actually has one. */
+                if (gs.camera_pos.x != 0 || gs.camera_pos.y != 0 || gs.camera_pos.z != 0) {
+                    scene->camera_pos = gs.camera_pos;
+                    scene->camera_target = gs.camera_target;
+                    scene->aperture = gs.aperture;
+                    scene->focus_dist = gs.focus_dist;
+                }
+            }
+            free_gltf(&gs);
         } else if (strcmp(key, "animation") == 0) {
             scene->has_animation = 1;
             if (*p == '{') p++;

@@ -1,0 +1,11 @@
+{
+  "camera": {"pos": [3, 2, 5], "target": [0, 0, 0]},
+  "gltf": "Box.gltf",
+  "lights": [
+    {"pos": [5, 10, 5], "size": 4}
+  ],
+  "floor": {"checkerboard": true},
+  "output": "images/test_box_gltf.png",
+  "width": 800,
+  "height": 600
+}
