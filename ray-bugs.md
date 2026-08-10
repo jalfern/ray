@@ -249,16 +249,16 @@ are inherent to different float hardware and are left as documented float noise.
 
 ## Scorecard (both V4-Flash passes + manual review + cross-file diff)
 
-Consolidated real-bug list: **7** (5 fixed, 2 open).
+Consolidated real-bug list: **7** (6 fixed, 1 documented limitation).
 
 | # | Bug | Source | Type | Status |
 |---|-----|--------|------|--------|
 | 1 | Sphere-light ~2× too dark | manual | shared / sampling | **FIXED** |
 | 2 | Glass + metallic ambient dropped (CPU) | V4-Flash (glass) + manual (metallic) | shared / dropped-term | **FIXED** |
-| 3 | CPU missing negative clamp | both | CPU-only parity (pending `.mm:403`) | open |
+| 3 | CPU missing negative clamp | both | CPU-only parity | **FIXED** |
 | 4 | Mesh emissive normal not flipped | manual | shared / sampling | **FIXED** |
 | 5 | Shadow rays don't skip origin mesh | V4-Flash | shared / missing-guard | **FIXED** |
-| 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard | open |
+| 6 | Camera zenith/nadir singularity | V4-Flash | shared / missing-guard | **FIXED** |
 | 7 | Floor checkerboard CPU/GPU parity | cross-file diff | shared / float-conv | **FIXED** |
 
 **What V4-Flash caught:** parity bugs (2, 3) and missing-guard bugs (5, 6) — including two on

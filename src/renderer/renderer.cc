@@ -597,9 +597,9 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
             color_avg = tone_map(color_avg, ctx->exposure);
 
             size_t idx = (y * ctx->width + x) * 3;
-            ctx->img->data[idx]   = (uint8_t)(fminf(color_avg.x, 1.0f) * 255.0f);
-            ctx->img->data[idx+1] = (uint8_t)(fminf(color_avg.y, 1.0f) * 255.0f);
-            ctx->img->data[idx+2] = (uint8_t)(fminf(color_avg.z, 1.0f) * 255.0f);
+            ctx->img->data[idx]   = (uint8_t)(fmaxf(0.0f, fminf(color_avg.x, 1.0f)) * 255.0f);
+            ctx->img->data[idx+1] = (uint8_t)(fmaxf(0.0f, fminf(color_avg.y, 1.0f)) * 255.0f);
+            ctx->img->data[idx+2] = (uint8_t)(fmaxf(0.0f, fminf(color_avg.z, 1.0f)) * 255.0f);
         }
     }
 }

@@ -57,17 +57,14 @@ make test     # Render all test scenes
 | Punctual lights from glTF (KHR_lights_punctual) | — |
 | Transmission / IOR from glTF (KHR_materials_transmission/ior) | — |
 
-## Known Bugs
+## Known Limitations
 
-- **Issue 3:** CPU render output not clamped to [0,1] before uint8 cast — negative values wrap to bright garbage pixels (CPU-only)
-- **Issue 6:** Camera basis collapses when looking straight up/down — zenith/nadir singularity (both backends)
-- **Glass traversal parity:** CPU uses recursive tracing, GPU uses iterative stack — transmitted light paths can diverge
+- **Glass traversal parity:** CPU uses recursive tracing, GPU uses iterative stack — transmitted light paths can diverge (both backends produce valid images, but refracted paths may differ)
 
 ## Next Steps
 
 ### Short term
 - **glTF extensions:** KHR_materials_transmission (glass), KHR_materials_ior, KHR_lights_punctual
-- **Fix remaining bugs:** CPU negative clamp, camera zenith/nadir singularity
 - **Normal mapping** for increased surface detail
 
 ### Longer term

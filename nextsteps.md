@@ -65,10 +65,10 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 ### Bug Status Summary
 - **Issue 1 (Sphere emissive ~2x too dark):** FIXED — pdf doubled, geometry term clamped
 - **Issue 2 (Glass + metallic ambient on CPU):** FIXED — base_color now included for all materials
-- **Issue 3 (CPU negative clamp):** OPEN — CPU-only parity bug
+- **Issue 3 (CPU negative clamp):** FIXED — CPU-only parity bug, fmaxf(0.0f, ...) added before uint8 cast
 - **Issue 4 (Mesh emissive normal not flipped):** FIXED — shared sampling bug, normal now flipped toward shaded point
 - **Issue 5 (Shadow rays don't skip origin mesh):** FIXED — shared missing-guard bug, skip_mesh parameter added to in_shadow on both backends
-- **Issue 6 (Camera zenith/nadir singularity):** OPEN — shared missing-guard bug
+- **Issue 6 (Camera zenith/nadir singularity):** FIXED — shared missing-guard bug, alternate up vector used when fwd parallels world up
 - **Glass traversal parity:** DOCUMENTED LIMITATION — recursive vs iterative traversal
 
 ### glTF Importer (NEW)
