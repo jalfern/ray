@@ -479,6 +479,8 @@ Scene* parse_scene(const char* filename) {
             } else {
                 strncpy(full_path, gltf_path, sizeof(full_path) - 1);
             }
+            fprintf(stderr, "[debug] calling load_gltf with path=[%s]\n", full_path);
+            fflush(stderr);
             GltfScene gs;
             memset(&gs, 0, sizeof(gs));
             if (load_gltf(full_path, &gs) == 0 && gs.num_meshes > 0) {
@@ -486,6 +488,14 @@ Scene* parse_scene(const char* filename) {
                 scene->num_meshes = gs.num_meshes;
                 gs.meshes = NULL;
                 gs.num_meshes = 0;
+                scene->textures = (ImageTexture*)calloc(gs.num_textures > 0 ? gs.num_textures : 1, sizeof(ImageTexture));
+                scene->num_textures = gs.num_textures;
+                for (int ti = 0; ti < gs.num_textures; ti++) {
+                    scene->textures[ti].data = gs.textures[ti].data;
+                    scene->textures[ti].width = gs.textures[ti].width;
+                    scene->textures[ti].height = gs.textures[ti].height;
+                    gs.textures[ti].data = NULL;
+                }
                 /* Only override camera if glTF actually has one. */
                 if (gs.camera_pos.x != 0 || gs.camera_pos.y != 0 || gs.camera_pos.z != 0) {
                     scene->camera_pos = gs.camera_pos;
@@ -603,6 +613,9 @@ void free_scene(Scene* scene) {
         for (int i = 0; i < scene->num_meshes; i++)
             free(scene->meshes[i].tris);
         free(scene->meshes);
+        for (int i = 0; i < scene->num_textures; i++)
+            free(scene->textures[i].data);
+        free(scene->textures);
         free(scene);
     }
 }

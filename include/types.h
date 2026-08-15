@@ -45,6 +45,7 @@ typedef struct {
     float ior;
     float roughness;
     int mat_type;
+    int tex_index;
     V pos;
     float scale;
     TextureData tex;

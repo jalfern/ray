@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     float* positions;
     float* normals;
+    float* texcoords;
     int*   indices;
     int num_verts;
     int num_indices;
@@ -48,6 +49,7 @@ typedef struct {
 typedef struct {
     int pos_acc;
     int norm_acc;
+    int tex_acc;
     int idx_acc;
     int material;
 } GltfPrimitiveRef;

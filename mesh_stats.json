@@ -3,71 +3,20 @@
   "meshes": [
     {
       "mesh_index": 0,
-      "num_prims": 1,
+      "num_prims": 0,
       "prims": [
-        {
-          "prim_index": 0,
-          "num_verts": 7036,
-          "num_indices": 36246,
-          "num_tris": 12082,
-          "material": 0,
-          "degenerate_mag_0": 0,
-          "degenerate_mag_1e-9": 0,
-          "degenerate_mag_1e-6": 322,
-          "cross_mag_min": 4.478921e-07,
-          "cross_mag_max": 6.743641e-04,
-          "cross_mag_mean": 6.164652e-05,
-          "bitwise_identical": 0,
-          "min_idx": 0,
-          "max_idx": 7035,
-          "index_oob": false
-        }
       ]
     },
     {
       "mesh_index": 1,
-      "num_prims": 1,
+      "num_prims": 0,
       "prims": [
-        {
-          "prim_index": 0,
-          "num_verts": 2990,
-          "num_indices": 16896,
-          "num_tris": 5632,
-          "material": 1,
-          "degenerate_mag_0": 0,
-          "degenerate_mag_1e-9": 0,
-          "degenerate_mag_1e-6": 0,
-          "cross_mag_min": 7.780957e-06,
-          "cross_mag_max": 9.018298e-05,
-          "cross_mag_mean": 6.364564e-05,
-          "bitwise_identical": 0,
-          "min_idx": 0,
-          "max_idx": 2989,
-          "index_oob": false
-        }
       ]
     },
     {
       "mesh_index": 2,
-      "num_prims": 1,
+      "num_prims": 0,
       "prims": [
-        {
-          "prim_index": 0,
-          "num_verts": 657,
-          "num_indices": 3456,
-          "num_tris": 1152,
-          "material": 2,
-          "degenerate_mag_0": 0,
-          "degenerate_mag_1e-9": 0,
-          "degenerate_mag_1e-6": 0,
-          "cross_mag_min": 1.424108e-04,
-          "cross_mag_max": 5.725111e-04,
-          "cross_mag_mean": 3.676845e-04,
-          "bitwise_identical": 0,
-          "min_idx": 0,
-          "max_idx": 656,
-          "index_oob": false
-        }
       ]
     }
   ]

@@ -63,9 +63,11 @@ make test     # Render all test scenes
 | KHR_materials_volume (thickness) | Parsed |
 | Punctual lights (KHR_lights_punctual) | — |
 | KHR_materials_iridescence | — |
-| glTF texture/color from baseColorTexture | — |
+| glTF texture/color from baseColorTexture | Done |
 | **Roughness plumbed through** (parsed → scene → GPU/CPU shaders) | Done |
 | **Configurable FOV** (`fov_y` in scene JSON, default 90°) | Done |
+| **Image texture loading** (PNG/JPEG via stb_image) | Done |
+| **sRGB→linear conversion + bilinear sampling** | Done |
 
 ## Debug Flags
 
@@ -78,7 +80,7 @@ make test     # Render all test scenes
 ## Next Steps
 
 ### Short term
-- **glTF baseColorTexture sampling** — all IridescenceLamp materials reference textures but the parser never feeds them to the shader
+- **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials
 - **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials
 - **Normal mapping** for increased surface detail
 

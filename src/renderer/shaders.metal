@@ -55,6 +55,7 @@ struct SceneGpu {
     int height;
     int has_env;
     float fov_scale;
+    int num_textures;
 };
 
 struct EmissiveGpu {
@@ -333,6 +334,7 @@ struct MeshMat {
     int tex_type;
     float tex_scale;
     packed_float3 tex_color2;
+    int tex_index;
 };
 
 static float hash3(float x, float y, float z) {
@@ -433,14 +435,27 @@ static float3 eval_texture(float3 p, float3 primary, int tex_type, float tex_sca
     return c1;
 }
 
+static float srgb_to_linear(float c) {
+    return c <= 0.04045f ? c / 12.92f : pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+static float3 sample_base_color(texture2d<float> tex, float2 uv) {
+    constexpr sampler s(filter::linear, address::repeat);
+    float u = uv.x - floor(uv.x);
+    float v = uv.y - floor(uv.y);
+    float4 sample = tex.sample(s, float2(u, v));
+    return float3(srgb_to_linear(sample.r), srgb_to_linear(sample.g), srgb_to_linear(sample.b));
+}
+
 static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int sc,
                         device const TriGpu* tris, int tc, device const BvhNode* bvh, int nb,
                         device const MeshMat* mats, int nm,
                         device const LightGpu* lights, int nl,
                         device const EmissiveGpu* emissive, int ne,
                         device const float* emissive_cdf, int ncdf,
-                        int sample_idx,
-                        texture2d<float> env_tex, int has_env) {
+                        int sample_idx, int num_textures,
+                        texture2d<float> env_tex, int has_env,
+                        texture2d<float> base_color_tex) {
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
@@ -591,10 +606,15 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 sc_col = eval_texture(p, sc_col, spheres[si].tex_type, spheres[si].tex_scale, spheres[si].tex_color2);
             } else if (hit_type == 2) {
                 int midx = tris[mi].mesh_idx;
-                if (midx >= 0 && midx < nm)
-                    sc_col = (mesh_uv.x != 0 || mesh_uv.y != 0)
-                        ? eval_texture_uv(mesh_uv, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2)
-                        : eval_texture(p, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2);
+                if (midx >= 0 && midx < nm) {
+                    if (mats[midx].tex_index >= 0 && mats[midx].tex_index < num_textures) {
+                        sc_col = sample_base_color(base_color_tex, mesh_uv);
+                    } else {
+                        sc_col = (mesh_uv.x != 0 || mesh_uv.y != 0)
+                            ? eval_texture_uv(mesh_uv, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2)
+                            : eval_texture(p, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2);
+                    }
+                }
             }
 
             if (mat == MAT_EMISSIVE) {
@@ -729,6 +749,7 @@ kernel void rk(
     device const EmissiveGpu* emissive [[buffer(8)]],
     device const float* emissive_cdf [[buffer(9)]],
     texture2d<float> env_tex [[texture(0)]],
+    texture2d<float> base_color_tex [[texture(1)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -767,8 +788,9 @@ kernel void rk(
                              lights, scene.num_lights,
                              emissive, scene.num_emissive,
                              emissive_cdf, scene.num_emissive_cdf,
-                             sidx,
-                             env_tex, scene.has_env);
+                             sidx, scene.num_textures,
+                             env_tex, scene.has_env,
+                             base_color_tex);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

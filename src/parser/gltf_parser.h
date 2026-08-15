@@ -4,6 +4,12 @@
 #include "scene.h"
 
 typedef struct {
+    unsigned char* data;
+    int width;
+    int height;
+} GltfTexture;
+
+typedef struct {
     MeshObj* meshes;
     int num_meshes;
     Vec3 camera_pos;
@@ -11,6 +17,8 @@ typedef struct {
     float aperture;
     float focus_dist;
     float fov_y;
+    GltfTexture* textures;
+    int num_textures;
 } GltfScene;
 
 extern int g_gltf_debug_enabled;

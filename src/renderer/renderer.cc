@@ -215,6 +215,44 @@ static int hit_floor(V o, V d, float *t) {
     return *t > EPS;
 }
 
+/* sRGB to linear per channel. */
+static float srgb_to_linear(float c) {
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+}
+
+/* Sample an RGBA8 texture with bilinear filtering and wrap-repeat. */
+static V sample_texture(ImageTexture* tex, float u, float v) {
+    u = u - floorf(u);
+    v = v - floorf(v);
+    float fx = u * tex->width - 0.5f;
+    float fy = v * tex->height - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    float rx = fx - ix;
+    float ry = fy - iy;
+    int x0 = (ix + tex->width * 1024) % tex->width;
+    int y0 = (iy + tex->height * 1024) % tex->height;
+    int x1 = (x0 + 1) % tex->width;
+    int y1 = (y0 + 1) % tex->height;
+    unsigned char* t = tex->data;
+    float c00r = srgb_to_linear(t[(y0 * tex->width + x0) * 4 + 0] / 255.0f);
+    float c00g = srgb_to_linear(t[(y0 * tex->width + x0) * 4 + 1] / 255.0f);
+    float c00b = srgb_to_linear(t[(y0 * tex->width + x0) * 4 + 2] / 255.0f);
+    float c10r = srgb_to_linear(t[(y0 * tex->width + x1) * 4 + 0] / 255.0f);
+    float c10g = srgb_to_linear(t[(y0 * tex->width + x1) * 4 + 1] / 255.0f);
+    float c10b = srgb_to_linear(t[(y0 * tex->width + x1) * 4 + 2] / 255.0f);
+    float c01r = srgb_to_linear(t[(y1 * tex->width + x0) * 4 + 0] / 255.0f);
+    float c01g = srgb_to_linear(t[(y1 * tex->width + x0) * 4 + 1] / 255.0f);
+    float c01b = srgb_to_linear(t[(y1 * tex->width + x0) * 4 + 2] / 255.0f);
+    float c11r = srgb_to_linear(t[(y1 * tex->width + x1) * 4 + 0] / 255.0f);
+    float c11g = srgb_to_linear(t[(y1 * tex->width + x1) * 4 + 1] / 255.0f);
+    float c11b = srgb_to_linear(t[(y1 * tex->width + x1) * 4 + 2] / 255.0f);
+    float r = (1-ry)*((1-rx)*c00r + rx*c10r) + ry*((1-rx)*c01r + rx*c11r);
+    float g = (1-ry)*((1-rx)*c00g + rx*c10g) + ry*((1-rx)*c01g + rx*c11g);
+    float b = (1-ry)*((1-rx)*c00b + rx*c10b) + ry*((1-rx)*c01b + rx*c11b);
+    return (V){r, g, b};
+}
+
 static V tone_map(V c, float exposure) {
     V s = mul(c, exposure);
     return (V){s.x / (1.0f + s.x), s.y / (1.0f + s.y), s.z / (1.0f + s.z)};
@@ -348,7 +386,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                    MeshObjData* meshes, int num_meshes,
                    LightData* lights, int num_lights,
                    EmissiveSurf* emissive, int num_emissive,
-                   int sample_idx, EnvMap* env) {
+                   int sample_idx, EnvMap* env,
+                   ImageTexture* textures, int num_textures) {
     if (depth > MAX_DEPTH) return (V){0,0,0};
 
     float ts, tf;
@@ -466,8 +505,12 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sc = eval_texture(p, sc, &spheres[si].tex);
     } else if (hit_type == 2) {
         V uv = (V){m_uv[0], m_uv[1], 0};
-        sc = (m_uv[0] != 0 || m_uv[1] != 0) ? eval_texture_uv(uv, sc, &meshes[mi].tex)
-                                             : eval_texture(p, sc, &meshes[mi].tex);
+        if (meshes[mi].tex_index >= 0 && meshes[mi].tex_index < num_textures && textures) {
+            sc = sample_texture(&textures[meshes[mi].tex_index], m_uv[0], m_uv[1]);
+        } else {
+            sc = (m_uv[0] != 0 || m_uv[1] != 0) ? eval_texture_uv(uv, sc, &meshes[mi].tex)
+                                                 : eval_texture(p, sc, &meshes[mi].tex);
+        }
     }
 
     if (mat == MAT_EMISSIVE) return sc;
@@ -555,7 +598,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,
                            spheres, num_spheres, meshes, num_meshes,
                            lights, num_lights, emissive, num_emissive,
-                           sample_idx, env);
+                           sample_idx, env, textures, num_textures);
 
     if (mat == MAT_METALLIC) {
         V metal = (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
@@ -578,7 +621,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         refr_col = trace_ray(refr_origin, refr_dir, depth + 1,
                              spheres, num_spheres, meshes, num_meshes,
                              lights, num_lights, emissive, num_emissive,
-                             sample_idx, env);
+                             sample_idx, env, textures, num_textures);
         refr_col = (V){refr_col.x * sc.x, refr_col.y * sc.y, refr_col.z * sc.z};
     }
 
@@ -608,6 +651,8 @@ typedef struct {
     int width, height;
     EnvMap* env;
     Image* img;
+    ImageTexture* textures;
+    int num_textures;
 } RenderContext;
 
 static void render_rows(RenderContext* ctx, int y_start, int y_end) {
@@ -639,7 +684,8 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                                         ctx->meshes, ctx->num_meshes,
                                         ctx->lights, ctx->num_lights,
                                         ctx->emissive, ctx->num_emissive,
-                                        sample_idx, ctx->env);
+                                        sample_idx, ctx->env,
+                                        ctx->textures, ctx->num_textures);
                     color_sum = add(color_sum, color);
                     sample_count++;
                 }
@@ -690,6 +736,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].ref = scene->meshes[i].reflectivity;
             meshes[i].ior = scene->meshes[i].ior;
             meshes[i].roughness = scene->meshes[i].roughness;
+            meshes[i].tex_index = scene->meshes[i].tex_index;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;
@@ -810,6 +857,8 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.width = scene->width;
     ctx.height = scene->height;
     ctx.env = envmap_load(scene->env_file, scene->env_intensity);
+    ctx.textures = scene->textures;
+    ctx.num_textures = scene->num_textures;
     ctx.img = create_image(scene->width, scene->height);
     return ctx;
 }

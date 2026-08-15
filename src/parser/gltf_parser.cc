@@ -5,6 +5,9 @@
 #include <string.h>
 #include <math.h>
 #include <ctype.h>
+#include <unistd.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 /* ── JSON token helpers ──────────────────────────────────────────
  *
@@ -496,7 +499,7 @@ static int parse_primitive(const char** j,
     if (*cur != '{') return 0;
     cur++;
 
-    int pos_acc = -1, norm_acc = -1, idx_acc = -1;
+    int pos_acc = -1, norm_acc = -1, tex_acc = -1, idx_acc = -1;
     int material = -1;
 
     while (*cur && *cur != '}') {
@@ -523,6 +526,7 @@ static int parse_primitive(const char** j,
                     int av = (int)fv;
                     if (strcmp(ak, "POSITION") == 0) pos_acc = av;
                     else if (strcmp(ak, "NORMAL") == 0) norm_acc = av;
+                    else if (strcmp(ak, "TEXCOORD_0") == 0) tex_acc = av;
                 }
                 skip_ws_ptr(&attr);
                 if (*attr == ',') attr++;
@@ -557,6 +561,11 @@ static int parse_primitive(const char** j,
     if (norm_acc >= 0 && norm_acc < na) {
         float* n = decode_acc_f32(&accs[norm_acc], views, bufs);
         if (n) out->normals = n;
+    }
+    /* Decode texcoords (VEC2) */
+    if (tex_acc >= 0 && tex_acc < na) {
+        float* tc = decode_acc_f32(&accs[tex_acc], views, bufs);
+        if (tc) out->texcoords = tc;
     }
     /* Decode indices */
     if (idx_acc >= 0 && idx_acc < na) {
@@ -611,6 +620,7 @@ static int parse_mesh_refs(const char** j,
                     memset(&pr, 0, sizeof(pr));
                     pr.pos_acc = -1;
                     pr.norm_acc = -1;
+                    pr.tex_acc = -1;
                     pr.idx_acc = -1;
                     pr.material = -1;
 
@@ -625,27 +635,28 @@ static int parse_mesh_refs(const char** j,
                         if (*pcur == ':') pcur++;
                         skip_ws_ptr(&pcur);
                         float fv;
-                        if (strcmp(pk, "attributes") == 0) {
-                            const char* attr = pcur;
-                            skip_ws_ptr(&attr);
-                            if (*attr == '{') attr++;
-                            while (*attr && *attr != '}') {
-                                char ak[64];
-                                const char* asave = attr;
-                                if (!parse_json_string(&attr, ak, sizeof(ak))) { attr = asave; skip_value(&attr); continue; }
-                                skip_ws_ptr(&attr);
-                                if (*attr == ':') attr++;
-                                skip_ws_ptr(&attr);
-                                if (parse_json_number(&attr, &fv)) {
-                                    int av = (int)fv;
-                                    if (strcmp(ak, "POSITION") == 0) pr.pos_acc = av;
-                                    else if (strcmp(ak, "NORMAL") == 0) pr.norm_acc = av;
-                                }
-                                skip_ws_ptr(&attr);
-                                if (*attr == ',') attr++;
-                            }
-                            if (*attr == '}') attr++;
-                            pcur = attr;
+                if (strcmp(pk, "attributes") == 0) {
+                    const char* attr = pcur;
+                    skip_ws_ptr(&attr);
+                    if (*attr == '{') attr++;
+                    while (*attr && *attr != '}') {
+                        char ak[64];
+                        const char* asave = attr;
+                        if (!parse_json_string(&attr, ak, sizeof(ak))) { attr = asave; skip_value(&attr); continue; }
+                        skip_ws_ptr(&attr);
+                        if (*attr == ':') attr++;
+                        skip_ws_ptr(&attr);
+                        if (parse_json_number(&attr, &fv)) {
+                            int av = (int)fv;
+                            if (strcmp(ak, "POSITION") == 0) pr.pos_acc = av;
+                            else if (strcmp(ak, "NORMAL") == 0) pr.norm_acc = av;
+                            else if (strcmp(ak, "TEXCOORD_0") == 0) pr.tex_acc = av;
+                        }
+                        skip_ws_ptr(&attr);
+                        if (*attr == ',') attr++;
+                    }
+                    if (*attr == '}') attr++;
+                    pcur = attr;
                         } else if (strcmp(pk, "indices") == 0) {
                             if (parse_json_number(&pcur, &fv)) pr.idx_acc = (int)fv;
                         } else if (strcmp(pk, "material") == 0) {
@@ -709,6 +720,10 @@ static void decode_meshes(GltfMeshRef* refs, int num_refs,
                 float* n = decode_acc_f32(&accs[pr->norm_acc], views, bufs);
                 if (n) pd.normals = n;
             }
+            if (pr->tex_acc >= 0 && pr->tex_acc < na) {
+                float* tc = decode_acc_f32(&accs[pr->tex_acc], views, bufs);
+                if (tc) pd.texcoords = tc;
+            }
             if (pr->idx_acc >= 0 && pr->idx_acc < na) {
                 int* ix = decode_acc_idx(&accs[pr->idx_acc], views, bufs);
                 if (ix) {
@@ -748,6 +763,8 @@ typedef struct {
     float emissive[3];
     float transmission;    /* 0-1, default 0 */
     float ior;             /* 1.0-3.0, default 1.5 */
+    int base_color_tex;    /* texture index, -1 = none */
+    int tex_coord;         /* UV set index (0 = TEXCOORD_0) */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1027,6 +1044,8 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].metallic = 1.0f;
         mats[n].roughness = 1.0f;
         mats[n].ior = 1.5f;
+        mats[n].base_color_tex = -1;
+        mats[n].tex_coord = 0;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1055,6 +1074,30 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                         float fv; if (parse_json_number(&p, &fv)) mats[n].metallic = fv;
                     } else if (strcmp(pk, "roughnessFactor") == 0) {
                         float fv; if (parse_json_number(&p, &fv)) mats[n].roughness = fv;
+                    } else if (strcmp(pk, "baseColorTexture") == 0) {
+                        const char* tx = p;
+                        skip_ws_ptr(&tx);
+                        if (*tx == '{') tx++;
+                        while (*tx && *tx != '}') {
+                            char tk[64];
+                            const char* tsave = tx;
+                            if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ':') tx++;
+                            skip_ws_ptr(&tx);
+                            float fv;
+                            if (strcmp(tk, "index") == 0) {
+                                if (parse_json_number(&tx, &fv)) mats[n].base_color_tex = (int)fv;
+                            } else if (strcmp(tk, "texCoord") == 0) {
+                                if (parse_json_number(&tx, &fv)) mats[n].tex_coord = (int)fv;
+                            } else {
+                                skip_value(&tx);
+                            }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ',') tx++;
+                        }
+                        if (*tx == '}') tx++;
+                        p = tx;
                     } else {
                         skip_value(&p);
                     }
@@ -1165,6 +1208,117 @@ static int check_extensions(const char* json) {
     return 0;
 }
 
+/* ── Image / texture support ──────────────────────────────────── */
+
+#define MAX_IMAGES 64
+#define MAX_TEXTURES 64
+
+/* Parse the images array: extract URIs, decode with stb_image. */
+static int parse_images(const char** j, GltfTexture* texs, int max, const char* base_dir) {
+    const char* cur = *j;
+    skip_ws_ptr(&cur);
+    if (*cur != '[') return 0;
+    cur++;
+    int n = 0;
+    while (*cur && *cur != ']' && n < max) {
+        skip_ws_ptr(&cur);
+        if (*cur == ']') break;
+        if (*cur != '{') { skip_value(&cur); continue; }
+        char uri[512] = {0};
+        const char* obj = cur;
+        skip_ws_ptr(&obj);
+        if (*obj == '{') obj++;
+        while (*obj && *obj != '}') {
+            char kbuf[128];
+            const char* save = obj;
+            if (!parse_json_string(&obj, kbuf, sizeof(kbuf))) { obj = save; skip_value(&obj); continue; }
+            skip_ws_ptr(&obj);
+            if (*obj == ':') obj++;
+            skip_ws_ptr(&obj);
+            if (strcmp(kbuf, "uri") == 0) {
+                parse_json_string(&obj, uri, sizeof(uri));
+            } else if (strcmp(kbuf, "mimeType") == 0) {
+                char mime[64]; parse_json_string(&obj, mime, sizeof(mime));
+            } else {
+                skip_value(&obj);
+            }
+            skip_ws_ptr(&obj);
+            if (*obj == ',') obj++;
+        }
+        if (*obj == '}') obj++;
+        cur = obj;
+
+        /* Decode the image if we have a URI. */
+        if (uri[0]) {
+            char full[1024];
+            if (uri[0] == '/') {
+                snprintf(full, sizeof(full), "%s", uri);
+            } else {
+                snprintf(full, sizeof(full), "%s/%s", base_dir, uri);
+            }
+            int w, h, ch;
+            unsigned char* data = stbi_load(full, &w, &h, &ch, 4);
+            if (data) {
+                texs[n].data = data;
+                texs[n].width = w;
+                texs[n].height = h;
+                fprintf(stderr, "  [image] decoded %s (%dx%d)\n", full, w, h);
+                n++;
+            } else {
+                fprintf(stderr, "  [image] FAILED to decode %s: %s\n", full, stbi_failure_reason());
+            }
+        }
+        skip_ws_ptr(&cur);
+        if (*cur == ',') cur++;
+    }
+    if (*cur == ']') cur++;
+    *j = cur;
+    return n;
+}
+
+/* Parse the textures array: map image index -> texture index. */
+static int parse_textures(const char** j, int* tex_to_img, int max) {
+    const char* cur = *j;
+    skip_ws_ptr(&cur);
+    if (*cur != '[') return 0;
+    cur++;
+    int n = 0;
+    while (*cur && *cur != ']' && n < max) {
+        skip_ws_ptr(&cur);
+        if (*cur == ']') break;
+        if (*cur != '{') { skip_value(&cur); continue; }
+        int source = -1;
+        const char* obj = cur;
+        skip_ws_ptr(&obj);
+        if (*obj == '{') obj++;
+        while (*obj && *obj != '}') {
+            char kbuf[128];
+            const char* save = obj;
+            if (!parse_json_string(&obj, kbuf, sizeof(kbuf))) { obj = save; skip_value(&obj); continue; }
+            skip_ws_ptr(&obj);
+            if (*obj == ':') obj++;
+            skip_ws_ptr(&obj);
+            float fv;
+            if (strcmp(kbuf, "source") == 0) {
+                if (parse_json_number(&obj, &fv)) source = (int)fv;
+            } else {
+                skip_value(&obj);
+            }
+            skip_ws_ptr(&obj);
+            if (*obj == ',') obj++;
+        }
+        if (*obj == '}') obj++;
+        cur = obj;
+        tex_to_img[n] = source;
+        n++;
+        skip_ws_ptr(&cur);
+        if (*cur == ',') cur++;
+    }
+    if (*cur == ']') cur++;
+    *j = cur;
+    return n;
+}
+
 /* ── Assemble the final GltfScene ──────────────────────────────
  *
  *  Walk the node tree, accumulate transforms, bake them into the
@@ -1177,7 +1331,9 @@ static void build_gltf_scene(
     GltfMeshData* meshes, int nm,
     GltfMaterial* materials, int num_materials,
     int* root_nodes, int num_root,
-    GltfScene* out)
+    GltfScene* out,
+    int* tex_to_img, int num_tex,
+    GltfTexture* texs, int num_texs)
 {
     out->aperture = 0.0f;
     out->focus_dist = 10.0f;
@@ -1241,6 +1397,7 @@ static void build_gltf_scene(
                 mo->tex_type = 0;
                 mo->tex_scale = 1.0f;
                 mo->tex_color2 = (Vec3){0, 0, 0};
+                mo->tex_index = -1;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1293,7 +1450,20 @@ static void build_gltf_scene(
                     mo->roughness = roughness;
                 }
 
-                /* Count triangles for this material group. */
+                /* Use image texture from glTF if available, else checker for UV verification. */
+                if (mat_idx >= 0 && mat_idx < num_materials && materials[mat_idx].base_color_tex >= 0) {
+                    int tex_idx = materials[mat_idx].base_color_tex;
+                    if (tex_idx < num_tex) {
+                        int img_idx = tex_to_img[tex_idx];
+                        if (img_idx >= 0 && img_idx < num_texs) {
+                            mo->tex_type = 0;
+                            mo->tex_index = img_idx;
+                        }
+                    }
+                } else {
+                    mo->tex_type = 1;
+                    mo->tex_scale = 8.0f;
+                }
                 int total_tris = 0;
                 for (int pi = 0; pi < md->num_prims; pi++) {
                     if (md->prims[pi].material != mat_idx) continue;
@@ -1340,10 +1510,26 @@ static void build_gltf_scene(
                             mo->tris[ti].n1[k] = n1[k];
                             mo->tris[ti].n2[k] = n2[k];
                         }
-                        mo->tris[ti].t0[0] = mo->tris[ti].t0[1] = 0;
-                        mo->tris[ti].t1[0] = mo->tris[ti].t1[1] = 0;
-                        mo->tris[ti].t2[0] = mo->tris[ti].t2[1] = 0;
+                        if (pd->texcoords) {
+                            mo->tris[ti].t0[0] = pd->texcoords[i0 * 2];
+                            mo->tris[ti].t0[1] = pd->texcoords[i0 * 2 + 1];
+                            mo->tris[ti].t1[0] = pd->texcoords[i1 * 2];
+                            mo->tris[ti].t1[1] = pd->texcoords[i1 * 2 + 1];
+                            mo->tris[ti].t2[0] = pd->texcoords[i2 * 2];
+                            mo->tris[ti].t2[1] = pd->texcoords[i2 * 2 + 1];
+                        } else {
+                            mo->tris[ti].t0[0] = mo->tris[ti].t0[1] = 0;
+                            mo->tris[ti].t1[0] = mo->tris[ti].t1[1] = 0;
+                            mo->tris[ti].t2[0] = mo->tris[ti].t2[1] = 0;
+                        }
                         mo->tris[ti].mesh_idx = out->num_meshes;
+                        if (ti < 5 && g_gltf_debug_enabled) {
+                            fprintf(stderr, "  [uv] mesh=%d tri=%d uv0=(%.4f,%.4f) uv1=(%.4f,%.4f) uv2=(%.4f,%.4f)\n",
+                                    out->num_meshes, ti,
+                                    mo->tris[ti].t0[0], mo->tris[ti].t0[1],
+                                    mo->tris[ti].t1[0], mo->tris[ti].t1[1],
+                                    mo->tris[ti].t2[0], mo->tris[ti].t2[1]);
+                        }
                         ti++;
                     }
                 }
@@ -1388,6 +1574,9 @@ static void build_gltf_scene(
 }
 
 int load_gltf(const char* path, GltfScene* out) {
+    fprintf(stderr, "[debug] load_gltf called with path=%s\n", path);
+    fprintf(stderr, "[debug] stderr is working\n");
+    fflush(stderr);
     memset(out, 0, sizeof(*out));
 
     char base_dir[512];
@@ -1396,8 +1585,10 @@ int load_gltf(const char* path, GltfScene* out) {
     char* last = strrchr(base_dir, '/');
     if (last) *last = '\0'; else { base_dir[0] = '.'; base_dir[1] = '\0'; }
 
+    fprintf(stderr, "[debug] about to fopen, path=[%s]\n", path ? path : "NULL");
+    fflush(stderr);
     FILE* f = fopen(path, "rb");
-    if (!f) return -1;
+    if (!f) { fprintf(stderr, "[debug] fopen FAILED for [%s]\n", path ? path : "NULL"); fflush(stderr); return -1; }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -1410,6 +1601,8 @@ int load_gltf(const char* path, GltfScene* out) {
 
     const char* cur = json;
     skip_ws_ptr(&cur);
+    { char tmp[256]; snprintf(tmp, sizeof(tmp), "[debug] json starts with: [%c] len=%ld\n", *cur ? *cur : '?', (long)sz); write(2, tmp, strlen(tmp)); }
+    fflush(stderr);
 
     GltfBuffer bufs[MAX_BUFFERS];
     GltfBufferView views[MAX_VIEWS];
@@ -1419,8 +1612,10 @@ int load_gltf(const char* path, GltfScene* out) {
     GltfNode nodes[MAX_NODES];
     GltfCamera cameras[MAX_MATERIALS];
     GltfMaterial materials[MAX_MATERIALS];
+    GltfTexture texs[MAX_IMAGES];
+    int tex_to_img[MAX_TEXTURES];
     int root_nodes[64];
-    int nb = 0, nv = 0, na = 0, nm = 0, nn = 0, nc = 0, nmat = 0, nr = 0;
+    int nb = 0, nv = 0, na = 0, nm = 0, nn = 0, nc = 0, nmat = 0, nr = 0, ni = 0, nt = 0;
 
     if (!mesh_refs || !meshes) { free(json); free(mesh_refs); free(meshes); return -1; }
     if (*cur != '{') { free(json); free(mesh_refs); free(meshes); return -1; }
@@ -1434,6 +1629,7 @@ int load_gltf(const char* path, GltfScene* out) {
         char kbuf[128];
         const char* save = root;
         if (!parse_json_string(&root, kbuf, sizeof(kbuf))) { root = save; skip_value(&root); continue; }
+        fprintf(stderr, "[debug] processing key: %s\n", kbuf);
         skip_ws_ptr(&root);
         if (*root == ':') root++;
         skip_ws_ptr(&root);
@@ -1455,7 +1651,14 @@ int load_gltf(const char* path, GltfScene* out) {
             nr = parse_scenes(&root, root_nodes, 64);
         } else if (strcmp(kbuf, "materials") == 0) {
             nmat = parse_materials(&root, materials, MAX_MATERIALS);
+        } else if (strcmp(kbuf, "images") == 0) {
+            fprintf(stderr, "[debug] parsing images array\n");
+            ni = parse_images(&root, texs, MAX_IMAGES, base_dir);
+            fprintf(stderr, "[debug] parsed %d images\n", ni);
+        } else if (strcmp(kbuf, "textures") == 0) {
+            nt = parse_textures(&root, tex_to_img, MAX_TEXTURES);
         } else {
+            fprintf(stderr, "[debug] UNMATCHED key: %s\n", kbuf);
             skip_value(&root);
         }
         skip_ws_ptr(&root);
@@ -1471,8 +1674,18 @@ int load_gltf(const char* path, GltfScene* out) {
     /* Second pass: decode meshes now that all arrays are loaded */
     decode_meshes(mesh_refs, nm, meshes, accs, na, views, bufs);
 
+    /* Store decoded textures in the output. */
+    out->textures = (GltfTexture*)calloc(ni > 0 ? ni : 1, sizeof(GltfTexture));
+    out->num_textures = 0;
+    for (int i = 0; i < ni; i++) {
+        if (texs[i].data) {
+            out->textures[out->num_textures] = texs[i];
+            out->num_textures++;
+        }
+    }
+
     /* Third pass: walk node tree, bake transforms, fill output */
-    build_gltf_scene(nodes, nn, cameras, nc, meshes, nm, materials, nmat, root_nodes, nr, out);
+    build_gltf_scene(nodes, nn, cameras, nc, meshes, nm, materials, nmat, root_nodes, nr, out, tex_to_img, nt, texs, ni);
 
     /* Debug diagnostics */
     if (g_gltf_debug_enabled) {
@@ -1492,5 +1705,9 @@ void free_gltf(GltfScene* out) {
         free(out->meshes[i].tris);
     }
     free(out->meshes);
+    for (int i = 0; i < out->num_textures; i++) {
+        if (out->textures[i].data) stbi_image_free(out->textures[i].data);
+    }
+    free(out->textures);
     memset(out, 0, sizeof(*out));
 }

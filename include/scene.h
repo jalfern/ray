@@ -21,6 +21,12 @@ typedef struct {
 } Sphere;
 
 typedef struct {
+    unsigned char* data;
+    int width;
+    int height;
+} ImageTexture;
+
+typedef struct {
     TriGpu* tris;
     int num_tris;
     Vec3 pos;
@@ -33,6 +39,7 @@ typedef struct {
     int tex_type;
     float tex_scale;
     Vec3 tex_color2;
+    int tex_index;
 } MeshObj;
 
 typedef struct {
@@ -71,6 +78,8 @@ typedef struct {
     char output[256];
     int has_animation;
     AnimationConfig animation;
+    ImageTexture* textures;
+    int num_textures;
 } Scene;
 
 #endif
