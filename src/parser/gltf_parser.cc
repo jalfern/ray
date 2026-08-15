@@ -1,4 +1,5 @@
 #include "gltf_parser.h"
+#include "gltf_debug.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -201,35 +202,9 @@ static int parse_int_array(const char** p, int* out, int max) {
     return count;
 }
 
-/* ── Internal glTF data model ────────────────────────────────── */
+/* ── Internal glTF data model (shared with gltf_debug) ──────── */
 
-#define MAX_BUFFERS 16
-#define MAX_VIEWS   64
-#define MAX_ACCESSORS 256
-#define MAX_MESHES   256
-#define MAX_PRIMITIVES 256
-#define MAX_NODES    128
-#define MAX_MATERIALS 32
-
-typedef struct {
-    unsigned char* data;
-    int byte_length;
-} GltfBuffer;
-
-typedef struct {
-    int buffer;
-    int byte_offset;
-    int byte_length;
-    int byte_stride;   /* 0 means tightly packed */
-} GltfBufferView;
-
-typedef struct {
-    int buffer_view;
-    int byte_offset;
-    int component_type;
-    int count;
-    int num_components; /* 1=SCALAR,2=VEC2,3=VEC3,4=VEC4 */
-} GltfAccessor;
+#include "gltf_parser_internal.h"
 
 /* ── Component-type helpers ──────────────────────────────────── */
 
@@ -501,35 +476,7 @@ static int parse_accessors(const char** j, GltfAccessor* accs, int max) {
     return n;
 }
 
-/* ── Raw decoded primitive data (pre-transform) ─────────────── */
-
-typedef struct {
-    float* positions;   /* [num_verts * 3] */
-    float* normals;     /* [num_verts * 3] */
-    int*   indices;     /* [num_indices] */
-    int num_verts;
-    int num_indices;
-    int material;       /* index into materials[] */
-} GltfPrimitiveData;
-
-typedef struct {
-    GltfPrimitiveData prims[MAX_PRIMITIVES];
-    int num_prims;
-} GltfMeshData;
-
-/* ── Intermediate JSON-only mesh refs (no decode yet) ────────── */
-
-typedef struct {
-    int pos_acc;
-    int norm_acc;
-    int idx_acc;
-    int material;
-} GltfPrimitiveRef;
-
-typedef struct {
-    GltfPrimitiveRef prims[MAX_PRIMITIVES];
-    int num_prims;
-} GltfMeshRef;
+/* ── Raw decoded / JSON-only mesh structs — in gltf_parser_internal.h ── */
 
 /* ── Parse a single primitive's attributes & indices ───────────
  *
@@ -1078,6 +1025,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].base_color[2] = 1.0f;
         mats[n].base_color[3] = 1.0f;
         mats[n].metallic = 1.0f;
+        mats[n].roughness = 1.0f;
         mats[n].ior = 1.5f;
 
         const char* obj = cur;
@@ -1297,15 +1245,27 @@ static void build_gltf_scene(
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
                 float metallic = 0.0f;
+                float roughness = 1.0f;
                 float emissive[3] = {0, 0, 0};
                 float transmission = 0.0f;
                 float ior = 1.5f;
                 if (mat_idx >= 0 && mat_idx < num_materials) {
                     memcpy(base_color, materials[mat_idx].base_color, 4 * sizeof(float));
                     metallic = materials[mat_idx].metallic;
+                    roughness = materials[mat_idx].roughness;
                     memcpy(emissive, materials[mat_idx].emissive, 3 * sizeof(float));
                     transmission = materials[mat_idx].transmission;
                     ior = materials[mat_idx].ior;
+                }
+
+                /* Debug: print final material props */
+                if (g_gltf_debug_enabled) {
+                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f\n",
+                            out->num_meshes, mat_idx,
+                            base_color[0], base_color[1], base_color[2], base_color[3],
+                            metallic, roughness,
+                            emissive[0], emissive[1], emissive[2],
+                            transmission, ior);
                 }
 
                 /* Classify material. */
@@ -1379,7 +1339,7 @@ static void build_gltf_scene(
                         mo->tris[ti].t0[0] = mo->tris[ti].t0[1] = 0;
                         mo->tris[ti].t1[0] = mo->tris[ti].t1[1] = 0;
                         mo->tris[ti].t2[0] = mo->tris[ti].t2[1] = 0;
-                        mo->tris[ti].mesh_idx = 0;
+                        mo->tris[ti].mesh_idx = out->num_meshes;
                         ti++;
                     }
                 }
@@ -1508,6 +1468,11 @@ int load_gltf(const char* path, GltfScene* out) {
 
     /* Third pass: walk node tree, bake transforms, fill output */
     build_gltf_scene(nodes, nn, cameras, nc, meshes, nm, materials, nmat, root_nodes, nr, out);
+
+    /* Debug diagnostics */
+    if (g_gltf_debug_enabled) {
+        gltf_debug_print(bufs, nb, views, nv, accs, na, mesh_refs, nm, meshes, path);
+    }
 
     free(json);
     free(mesh_refs);

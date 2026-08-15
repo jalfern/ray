@@ -63,7 +63,9 @@ struct TriRef {
 };
 
 static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
-                       TriGpu* tris, std::vector<TriRef>& refs, int start, int end, int depth) {
+                       TriGpu* tris, std::vector<TriRef>& refs, int start, int end, int depth,
+                       int* max_depth = nullptr) {
+    if (max_depth && depth > *max_depth) *max_depth = depth;
     if (node_count >= max_nodes) {
         fprintf(stderr, "[bvh] warning: node buffer overflow (%d >= %d), aborting build\n",
                 node_count, max_nodes);
@@ -214,8 +216,8 @@ static int build_rec(BvhNode* nodes, int& node_count, int max_nodes,
 
     nodes[node_idx].tri_start = -1;
     nodes[node_idx].tri_end = -1;
-    int left_idx  = build_rec(nodes, node_count, max_nodes, tris, refs, start, mid, depth + 1);
-    int right_idx = build_rec(nodes, node_count, max_nodes, tris, refs, mid, end, depth + 1);
+    int left_idx  = build_rec(nodes, node_count, max_nodes, tris, refs, start, mid, depth + 1, max_depth);
+    int right_idx = build_rec(nodes, node_count, max_nodes, tris, refs, mid, end, depth + 1, max_depth);
     if (left_idx < 0 || right_idx < 0) return -1;
     nodes[node_idx].left  = left_idx;
     nodes[node_idx].right = right_idx;
@@ -233,8 +235,11 @@ int bvh_build(BvhNode* nodes, int max_nodes, TriGpu* tris, int num_tris) {
      }
 
     int node_count = 0;
-    int rc = build_rec(nodes, node_count, max_nodes, tris, refs, 0, num_tris, 0);
+    int max_depth_seen = 0;
+    int rc = build_rec(nodes, node_count, max_nodes, tris, refs, 0, num_tris, 0, &max_depth_seen);
     if (rc < 0) return 0;
+    fprintf(stderr, "[bvh] tree: nodes=%d max_depth=%d tris=%d\n",
+            node_count, max_depth_seen, num_tris);
 
     // Reorder triangles so leaf ranges are contiguous in the triangle array.
     // After bvh_build the leaves hold old index ranges [tri_start, tri_end) into

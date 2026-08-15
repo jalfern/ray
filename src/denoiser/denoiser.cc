@@ -44,7 +44,9 @@ static int g_hit_tri(V3 o, V3 d, const float v0[3], const float v1[3], const flo
     V3 e2 = sub3(v3(v2[0],v2[1],v2[2]), v3(v0[0],v0[1],v0[2]));
     V3 pv = cross3(d, e2);
     float det = dot3(e1, pv);
-    if (fabsf(det) < EPS) return 0;
+    float len1_sq = e1.x*e1.x + e1.y*e1.y + e1.z*e1.z;
+    float len2_sq = e2.x*e2.x + e2.y*e2.y + e2.z*e2.z;
+    if (fabsf(det) < 1e-7f * (len1_sq + len2_sq + 1e-12f) * 0.5f) return 0;
     float inv_det = 1.0f / det;
     V3 tv = sub3(o, v3(v0[0],v0[1],v0[2]));
     *u = dot3(tv, pv) * inv_det;

@@ -11,6 +11,11 @@
 #include <vector>
 #include <float.h>
 
+/* ── Debug counters ────────────────────────────────────────── */
+static int g_debug_frame_done = 0;
+static int g_hit_tri_tests[256] = {0};
+static int g_hit_tri_hits[256] = {0};
+
 #define EPS 1e-4f
 #define AA_SAMPLES 16
 #define MAX_DEPTH 4
@@ -58,12 +63,47 @@ static int hit_any_sphere(V o, V d, float *t, V *hit_normal, int *hit_idx,
 }
 
 static int hit_tri(V o, V d, float v0[3], float v1[3], float v2[3], float *t,
-                   float *u, float *v) {
+                   float *u, float *v, int debug_mesh, int debug_tri) {
     V e1 = (V){v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]};
     V e2 = (V){v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]};
     V pv = cross(d, e2);
     float det = dot(e1, pv);
-    if (fabsf(det) < EPS) return 0;
+    float len1_sq = e1.x*e1.x + e1.y*e1.y + e1.z*e1.z;
+    float len2_sq = e2.x*e2.x + e2.y*e2.y + e2.z*e2.z;
+    float det_eps = 1e-7f * (len1_sq + len2_sq + 1e-12f) * 0.5f;
+    if (debug_mesh >= 0 && g_hit_tri_tests[debug_mesh] < 10) {
+        fprintf(stderr, "[hit_tri_debug] mesh=%d tri_idx=%d  "
+                "v0=(%.10e,%.10e,%.10e) v1=(%.10e,%.10e,%.10e) v2=(%.10e,%.10e,%.10e)  "
+                "e1=(%.10e,%.10e,%.10e) e2=(%.10e,%.10e,%.10e)  det=%.10e  |det|=%e  det_eps=%e",
+                debug_mesh, debug_tri,
+                v0[0], v0[1], v0[2], v1[0], v1[1], v1[2], v2[0], v2[1], v2[2],
+                e1.x, e1.y, e1.z, e2.x, e2.y, e2.z,
+                det, fabsf(det), det_eps);
+        if (fabsf(det) < det_eps) {
+            fprintf(stderr, "  REJECT: |det|<det_eps\n");
+        } else {
+            float inv_det = 1.0f / det;
+            V tv = sub(o, (V){v0[0], v0[1], v0[2]});
+            *u = dot(tv, pv) * inv_det;
+            if (*u < 0 || *u > 1) {
+                fprintf(stderr, "  REJECT: u=%.10e out of [0,1]\n", *u);
+            } else {
+                V qv = cross(tv, e1);
+                *v = dot(d, qv) * inv_det;
+                if (*v < 0 || *u + *v > 1) {
+                    fprintf(stderr, "  REJECT: v=%.10e u+v=%.10e out of range\n", *v, *u + *v);
+                } else {
+                    *t = dot(e2, qv) * inv_det;
+                    if (*t > EPS) {
+                        fprintf(stderr, "  HIT: t=%.10e u=%.10e v=%.10e\n", *t, *u, *v);
+                    } else {
+                        fprintf(stderr, "  REJECT: t=%.10e <= EPS\n", *t);
+                    }
+                }
+            }
+        }
+    }
+    if (fabsf(det) < det_eps) return 0;
     float inv_det = 1.0f / det;
     V tv = sub(o, (V){v0[0], v0[1], v0[2]});
     *u = dot(tv, pv) * inv_det;
@@ -90,7 +130,7 @@ static int bbox_hit(V o, V d, const float* bmin, const float* bmax) {
 }
 
 static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
-                         TriGpu* tris, BvhNode* nodes, int /*num_nodes*/) {
+                         TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx) {
     float best_t = 1e9f;
     int hit = 0;
     float best_u = 0, best_v = 0;
@@ -112,8 +152,12 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         } else {
             for (int i = node->tri_start; i < node->tri_end; i++) {
                 float ti, u, v;
-                if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &ti, &u, &v) && ti < best_t) {
+                if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
+                int dbg_mesh = (mesh_idx == 1) ? 1 : -1;
+                int dbg_tri = (mesh_idx == 1) ? i : -1;
+                if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &ti, &u, &v, dbg_mesh, dbg_tri) && ti < best_t) {
                     best_t = ti; hit = 1; best_tri = &tris[i]; best_u = u; best_v = v;
+                    if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_hits[mesh_idx]++;
                 }
             }
         }
@@ -136,7 +180,7 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
 }
 
 static int hit_mesh_bvh_any(V o, V d, float max_t,
-                              TriGpu* tris, BvhNode* nodes, int /*num_nodes*/) {
+                              TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx) {
     int stack[64];
     int sp = 0;
     stack[sp++] = 0;
@@ -151,9 +195,14 @@ static int hit_mesh_bvh_any(V o, V d, float max_t,
         } else {
             for (int i = node->tri_start; i < node->tri_end; i++) {
                 float t, u, v;
-                if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &t, &u, &v) &&
-                    t < max_t && t > EPS)
+                if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
+                int dbg_mesh = (mesh_idx == 1) ? 1 : -1;
+                int dbg_tri = (mesh_idx == 1) ? i : -1;
+                if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &t, &u, &v, dbg_mesh, dbg_tri) &&
+                    t < max_t && t > EPS) {
+                    if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_hits[mesh_idx]++;
                     return 1;
+                }
             }
         }
     }
@@ -263,7 +312,7 @@ static int emissive_visible(V p, V light_pos, float light_dist,
         if (m == skip_mesh) continue;
         if (meshes[m].num_bvh_nodes > 0 &&
             hit_mesh_bvh_any(ray_o, ray_dir, ld - 1e-4f,
-                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes))
+                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m))
             return 0;
     }
     return 1;
@@ -289,7 +338,7 @@ static float in_shadow(V p, LightData light, SphereData* spheres, int num_sphere
         if (m == skip_mesh) continue;
         if (meshes[m].num_bvh_nodes > 0 &&
             hit_mesh_bvh_any(ray_o, ray_dir, light_dist,
-                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes))
+                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m))
             return 1;
     }
     return 0;
@@ -316,7 +365,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         float tmi;
         float uv[2];
         if (meshes[i].num_bvh_nodes > 0 &&
-            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes) && tmi < tm) {
+            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i) && tmi < tm) {
             tm = tmi; mi = i; mn = hit_n; m_uv[0] = uv[0]; m_uv[1] = uv[1];
         }
     }
@@ -646,6 +695,20 @@ static RenderContext setup_context(const Scene* scene) {
                 meshes[i].bvh_nodes = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
                 meshes[i].num_bvh_nodes = bvh_build(meshes[i].bvh_nodes,
                     max_nodes, meshes[i].tris, meshes[i].num_tris);
+                fprintf(stderr, "  mesh[%d] loaded_tris=%d bvh_nodes=%d\n",
+                        i, scene->meshes[i].num_tris, meshes[i].num_bvh_nodes);
+                if (meshes[i].num_bvh_nodes > 0) {
+                    BvhNode* root = &meshes[i].bvh_nodes[0];
+                    int leaf_tris = 0;
+                    for (int ni = 0; ni < meshes[i].num_bvh_nodes; ni++) {
+                        if (meshes[i].bvh_nodes[ni].left < 0)
+                            leaf_tris += meshes[i].bvh_nodes[ni].tri_end - meshes[i].bvh_nodes[ni].tri_start;
+                    }
+                    fprintf(stderr, "    root_bbox=[%.6e %.6e %.6e] x [%.6e %.6e %.6e] leaf_tris=%d\n",
+                            root->bbox_min[0], root->bbox_min[1], root->bbox_min[2],
+                            root->bbox_max[0], root->bbox_max[1], root->bbox_max[2],
+                            leaf_tris);
+                }
             } else {
                 meshes[i].bvh_nodes = NULL;
                 meshes[i].num_bvh_nodes = 0;
@@ -653,6 +716,15 @@ static RenderContext setup_context(const Scene* scene) {
         }
     }
     ctx.meshes = meshes;
+    {
+        int total_loaded = 0, total_bvh = 0;
+        for (int i = 0; i < ctx.num_meshes; i++) {
+            total_loaded += scene->meshes[i].num_tris;
+            total_bvh   += ctx.meshes[i].num_tris;
+        }
+        fprintf(stderr, "[debug] total loaded_tris=%d  total in_bvh_tris=%d\n",
+                total_loaded, total_bvh);
+    }
 
     LightData* lights = (LightData*)calloc(scene->num_lights > 0 ? scene->num_lights : 1, sizeof(LightData));
     ctx.num_lights = scene->num_lights;
@@ -756,7 +828,22 @@ static void apply_denoise(Image* img, const Scene* scene) {
 
 Image* render_frame(const Scene* scene) {
     RenderContext ctx = setup_context(scene);
+    fprintf(stderr, "\n[debug] skip_mesh values (emissive self-avoid):\n");
+    for (int ei = 0; ei < ctx.num_emissive; ei++) {
+        if (ctx.emissive[ei].type == 1) {
+            fprintf(stderr, "  emissive[%d] type=mesh src_idx=%d -> skip_mesh=%d\n",
+                    ei, ctx.emissive[ei].src_idx, ctx.emissive[ei].src_idx);
+        }
+    }
+    g_debug_frame_done = 0;
+    memset(g_hit_tri_tests, 0, sizeof(g_hit_tri_tests));
+    memset(g_hit_tri_hits, 0, sizeof(g_hit_tri_hits));
     render_rows(&ctx, 0, ctx.height);
+    fprintf(stderr, "\n[debug] hit_tri counters (one full frame):\n");
+    for (int i = 0; i < ctx.num_meshes; i++) {
+        fprintf(stderr, "  mesh[%d] tests=%d hits=%d\n", i, g_hit_tri_tests[i], g_hit_tri_hits[i]);
+    }
+    g_debug_frame_done = 1;
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
     free_render_buffers(&ctx);
@@ -768,6 +855,17 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
     if (num_threads < 1) num_threads = 1;
     if (num_threads > ctx.height) num_threads = ctx.height;
 
+    fprintf(stderr, "\n[debug] skip_mesh values (emissive self-avoid):\n");
+    for (int ei = 0; ei < ctx.num_emissive; ei++) {
+        if (ctx.emissive[ei].type == 1) {
+            fprintf(stderr, "  emissive[%d] type=mesh src_idx=%d -> skip_mesh=%d\n",
+                    ei, ctx.emissive[ei].src_idx, ctx.emissive[ei].src_idx);
+        }
+    }
+    g_debug_frame_done = 0;
+    memset(g_hit_tri_tests, 0, sizeof(g_hit_tri_tests));
+    memset(g_hit_tri_hits, 0, sizeof(g_hit_tri_hits));
+
     std::vector<std::thread> threads;
     int rows_per = ctx.height / num_threads;
     for (int t = 0; t < num_threads; t++) {
@@ -776,6 +874,11 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
         threads.emplace_back(render_rows, &ctx, y0, y1);
     }
     for (auto& th : threads) th.join();
+    fprintf(stderr, "\n[debug] hit_tri counters (one full frame):\n");
+    for (int i = 0; i < ctx.num_meshes; i++) {
+        fprintf(stderr, "  mesh[%d] tests=%d hits=%d\n", i, g_hit_tri_tests[i], g_hit_tri_hits[i]);
+    }
+    g_debug_frame_done = 1;
     apply_denoise(ctx.img, scene);
     envmap_free(ctx.env);
     free_render_buffers(&ctx);

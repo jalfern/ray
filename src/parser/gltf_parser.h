@@ -12,6 +12,8 @@ typedef struct {
     float focus_dist;
 } GltfScene;
 
+extern int g_gltf_debug_enabled;
+
 int load_gltf(const char* path, GltfScene* out);
 void free_gltf(GltfScene* out);
 

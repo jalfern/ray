@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include <thread>
 #include "parser/parser.h"
+#include "parser/gltf_parser.h"
 #include "renderer/renderer.h"
 #include "renderer/gpu_renderer.h"
 #include "output/output.h"
@@ -104,6 +105,7 @@ int main(int argc, char** argv) {
             num_threads = atoi(argv[++i]);
             if (num_threads < 1) num_threads = 1;
            }
+        else if (strcmp(argv[i], "--mesh-stats") == 0) g_gltf_debug_enabled = 1;
         else if (argv[i][0] != '-') scene_file = argv[i];
        }
 
@@ -120,14 +122,13 @@ int main(int argc, char** argv) {
 
     Image* img = render_best(scene);
 
-     // Write PPM to stdout (original behavior)
-    write_ppm(img, stdout);
-
-     // Optionally write PNG if output filename specified
+     // Write PNG if output filename specified, otherwise PPM to stdout
     if (scene->output[0]) {
         write_png(img, scene->output);
         printf("Also saved as %s\n", scene->output);
-       }
+    } else {
+        write_ppm(img, stdout);
+    }
 
     free_image(img);
     free_scene(scene);

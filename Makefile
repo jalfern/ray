@@ -13,6 +13,7 @@ SOURCES = $(SRC_DIR)/main.cc \
           $(SRC_DIR)/parser/parser.cc \
           $(SRC_DIR)/parser/obj_parser.cc \
           $(SRC_DIR)/parser/gltf_parser.cc \
+          $(SRC_DIR)/parser/gltf_debug.cc \
           $(SRC_DIR)/renderer/renderer.cc \
           $(SRC_DIR)/renderer/bvh.cc \
           $(SRC_DIR)/output/output.cc \

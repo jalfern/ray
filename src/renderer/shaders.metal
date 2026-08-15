@@ -118,7 +118,9 @@ static bool hit_tri(float3 o, float3 d, float3 v0, float3 v1, float3 v2,
     float3 e1 = v1 - v0, e2 = v2 - v0;
     float3 pv = cross(d, e2);
     float det = dot(e1, pv);
-    if (fabs(det) < EPS) return false;
+    float len1_sq = e1.x*e1.x + e1.y*e1.y + e1.z*e1.z;
+    float len2_sq = e2.x*e2.x + e2.y*e2.y + e2.z*e2.z;
+    if (fabs(det) < 1e-7 * (len1_sq + len2_sq + 1e-12) * 0.5) return false;
     float inv = 1.0f / det;
     float3 tv = o - v0;
     u = dot(tv, pv) * inv;
@@ -515,6 +517,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     sior = mats[mesh_idx].ior;
                     smat = mats[mesh_idx].mat_type;
                 }
+
                  hit_n = tri_normal(tris[mi].v0, tris[mi].v1, tris[mi].v2,
                                      tris[mi].n0, tris[mi].n1, tris[mi].n2, mu, mv);
                   if (dot(hit_n, rd) > 0) hit_n = -hit_n;

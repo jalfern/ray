@@ -19,6 +19,7 @@
 #include "gpu_renderer.h"
 #include "../../include/types.h"
 #include "../../include/bvh.h"
+#include "../../include/gltf_debug.h"
 #include "../envmap/envmap.h"
 
 #import <Metal/Metal.h>
@@ -221,23 +222,48 @@ Image* render_frame_gpu(const Scene* scene) {
          for (int m = 0; m < scene->num_meshes; m++)
              if (scene->meshes[m].num_tris > 0) total_tris += scene->meshes[m].num_tris;
 
-         TriGpu* all_tris = NULL;
-         BvhNode* all_bvh = NULL;
-         int num_bvh_nodes = 0;
-         if (total_tris > 0) {
-             all_tris = (TriGpu*)malloc(total_tris * sizeof(TriGpu));
-             int off = 0;
-             for (int m = 0; m < scene->num_meshes; m++) {
-                 for (int t = 0; t < scene->meshes[m].num_tris; t++) {
-                     all_tris[off] = scene->meshes[m].tris[t];
-                     all_tris[off].mesh_idx = m;
-                     off++;
-                  }
+          TriGpu* all_tris = NULL;
+          BvhNode* all_bvh = NULL;
+          int num_bvh_nodes = 0;
+          int* tri_offset = NULL;
+          if (total_tris > 0) {
+              all_tris = (TriGpu*)malloc(total_tris * sizeof(TriGpu));
+              int off = 0;
+              for (int m = 0; m < scene->num_meshes; m++) {
+                  for (int t = 0; t < scene->meshes[m].num_tris; t++) {
+                      all_tris[off] = scene->meshes[m].tris[t];
+                      all_tris[off].mesh_idx = m;
+                      off++;
+                   }
+               }
+              /* Compute per-mesh triangle offsets */
+              tri_offset = (int*)calloc(scene->num_meshes > 0 ? scene->num_meshes : 1, sizeof(int));
+              int acc = 0;
+              for (int m = 0; m < scene->num_meshes; m++) {
+                  tri_offset[m] = acc;
+                  acc += scene->meshes[m].num_tris;
               }
-             int max_nodes = 2 * total_tris;
-             all_bvh = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
-             num_bvh_nodes = bvh_build(all_bvh, max_nodes, all_tris, total_tris);
-           }
+              int max_nodes = 2 * total_tris;
+              all_bvh = (BvhNode*)malloc(max_nodes * sizeof(BvhNode));
+              if (g_gltf_debug_enabled) {
+                  gltf_debug_global_arrays(scene, all_tris, total_tris, tri_offset, NULL, 0, 0);
+              }
+               num_bvh_nodes = bvh_build(all_bvh, max_nodes, all_tris, total_tris);
+               if (g_gltf_debug_enabled) {
+                   gltf_debug_global_arrays(scene, all_tris, total_tris, tri_offset, all_bvh, num_bvh_nodes, 1);
+                   /* Post-BVH per-mesh_idx count */
+                   int* mesh_counts = (int*)calloc(scene->num_meshes > 0 ? scene->num_meshes : 1, sizeof(int));
+                   for (int t = 0; t < total_tris; t++) {
+                       int midx = all_tris[t].mesh_idx;
+                       if (midx >= 0 && midx < scene->num_meshes) mesh_counts[midx]++;
+                   }
+                   fprintf(stderr, "\n[mesh_idx] Post-BVH triangle counts per mesh_idx:\n");
+                   for (int m = 0; m < scene->num_meshes; m++) {
+                       fprintf(stderr, "  mesh_idx=%d  count=%d\n", m, mesh_counts[m]);
+                   }
+                   free(mesh_counts);
+               }
+             }
 
           // --- Mesh materials ---
          MeshMatGpu* mats = NULL;
@@ -255,17 +281,7 @@ Image* render_frame_gpu(const Scene* scene) {
                }
            }
 
-          // Per-mesh triangle offsets into combined triangle array
-         int* tri_offset = (int*)calloc(scene->num_meshes > 0 ? scene->num_meshes : 1, sizeof(int));
-           {
-             int _off = 0;
-             for (int m = 0; m < scene->num_meshes; m++) {
-                 tri_offset[m] = _off;
-                 _off += scene->meshes[m].num_tris;
-               }
-           }
-
-          // --- Emissive surfaces (sphere + mesh) ---
+           // --- Emissive surfaces (sphere + mesh) ---
          int num_emissive = 0, num_emissive_cdf = 0;
          for (int i = 0; i < scene->num_spheres; i++)
              if (gpu_mat_name_to_type(gpu_material(&scene->spheres[i], 1)) == MAT_EMISSIVE)
@@ -291,29 +307,37 @@ Image* render_frame_gpu(const Scene* scene) {
                  emissive[ei].cdf_offset = 0; emissive[ei].src_idx = i;
                  ei++;
                }
-             for (int i = 0; i < scene->num_meshes; i++) {
-                 if (gpu_mat_name_to_type(gpu_material(&scene->meshes[i], 0)) != MAT_EMISSIVE) continue;
-                 emissive[ei].emitted[0] = scene->meshes[i].color.x;
-                 emissive[ei].emitted[1] = scene->meshes[i].color.y;
-                 emissive[ei].emitted[2] = scene->meshes[i].color.z;
-                 emissive[ei].type = 1;
-                 emissive[ei].c[0] = 0; emissive[ei].c[1] = 0; emissive[ei].c[2] = 0;
-                 emissive[ei].r = 0;
-                 emissive[ei].tri_start = tri_offset[i];
-                 emissive[ei].tri_end = tri_offset[i] + scene->meshes[i].num_tris;
-                 emissive[ei].cdf_offset = cdf_off;
-                 emissive[ei].src_idx = i;
-                 float total = 0;
-                 emissive_cdf[cdf_off++] = 0;
-                 for (int t = 0; t < scene->meshes[i].num_tris; t++) {
-                     total += gpu_tri_area(&scene->meshes[i].tris[t]);
-                     emissive_cdf[cdf_off++] = total;
+              for (int i = 0; i < scene->num_meshes; i++) {
+                  if (gpu_mat_name_to_type(gpu_material(&scene->meshes[i], 0)) != MAT_EMISSIVE) continue;
+                  emissive[ei].emitted[0] = scene->meshes[i].color.x;
+                  emissive[ei].emitted[1] = scene->meshes[i].color.y;
+                  emissive[ei].emitted[2] = scene->meshes[i].color.z;
+                  emissive[ei].type = 1;
+                  emissive[ei].c[0] = 0; emissive[ei].c[1] = 0; emissive[ei].c[2] = 0;
+                  emissive[ei].r = 0;
+                  /* Scan post-BVH combined array for correct range */
+                  int s_start = total_tris, s_end = 0;
+                  for (int t = 0; t < total_tris; t++) {
+                      if (all_tris[t].mesh_idx == i) {
+                          if (t < s_start) s_start = t;
+                          if (t >= s_end) s_end = t + 1;
+                      }
                   }
-                 emissive[ei].area = total;
-                 ei++;
-               }
-           }
-         free(tri_offset);
+                  emissive[ei].tri_start = s_start;
+                  emissive[ei].tri_end = s_end;
+                  emissive[ei].cdf_offset = cdf_off;
+                  emissive[ei].src_idx = i;
+                  float total = 0;
+                  emissive_cdf[cdf_off++] = 0;
+                  for (int t = 0; t < scene->meshes[i].num_tris; t++) {
+                      total += gpu_tri_area(&scene->meshes[i].tris[t]);
+                      emissive_cdf[cdf_off++] = total;
+                   }
+                  emissive[ei].area = total;
+                  ei++;
+                }
+            }
+          free(tri_offset);
 
           // --- Scene globals ---
          SceneGpu sc;

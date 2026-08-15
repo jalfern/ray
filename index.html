@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ray - glTF Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+    #canvas-container { width: 100%; height: 100%; display: block; }
+    #overlay {
+      position: absolute; top: 12px; left: 12px;
+      display: flex; flex-direction: column; gap: 6px;
+      font-family: monospace; font-size: 13px;
+      pointer-events: none;
+    }
+    #overlay > * { pointer-events: auto; }
+    #info {
+      color: #0f0; background: rgba(0,0,0,0.7);
+      padding: 8px 12px; border-radius: 4px;
+      user-select: none;
+    }
+    #controls-row {
+      display: flex; gap: 8px; align-items: center;
+    }
+    #scene-select {
+      background: rgba(0,0,0,0.7); color: #0f0;
+      border: 1px solid #0f0; border-radius: 4px;
+      padding: 6px 8px; font-family: monospace; font-size: 13px;
+      cursor: pointer; max-width: 220px;
+    }
+    #scene-select option { background: #222; color: #0f0; }
+    #file-input-label {
+      background: rgba(0,0,0,0.7); color: #0f0;
+      border: 1px solid #0f0; border-radius: 4px;
+      padding: 6px 8px; font-family: monospace; font-size: 13px;
+      cursor: pointer; white-space: nowrap;
+    }
+    #file-input-label input {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <div id="overlay">
+    <div id="info">ray viewer — loading...</div>
+    <div id="controls-row">
+      <select id="scene-select">
+        <option value="test_scenes/IridescenceLamp/IridescenceLamp.gltf">IridescenceLamp</option>
+        <option value="test_scenes/Box.gltf" selected>Box</option>
+        <option value="test_scenes/Suzanne.gltf">Suzanne</option>
+        <option value="test_scenes/Lantern.gltf">Lantern</option>
+        <option value="test_scenes/WaterBottle.gltf">WaterBottle</option>
+        <option value="test_scenes/Avocado.gltf">Avocado</option>
+        <option value="test_scenes/BoomBox.gltf">BoomBox</option>
+        <option value="test_scenes/MetalRoughSpheres.gltf">MetalRoughSpheres</option>
+      </select>
+      <label id="file-input-label">
+        &#x1f4c2; Open File(s)
+        <input type="file" id="file-input" accept=".gltf,.glb,.bin" multiple />
+      </label>
+    </div>
+  </div>
+  <script type="module" src="/web_viewer/src/main.ts"></script>
+</body>
+</html>
