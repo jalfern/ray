@@ -10,6 +10,7 @@ typedef struct {
     Vec3 camera_target;
     float aperture;
     float focus_dist;
+    float fov_y;
 } GltfScene;
 
 extern int g_gltf_debug_enabled;

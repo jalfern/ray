@@ -61,7 +61,7 @@ static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, const char* e
 
 typedef struct {
     float c[3];
-    float r, ref, ior;
+    float r, ref, ior, roughness;
     float col[3];
     int mat_type, tex_type;
     float tex_scale;
@@ -84,6 +84,7 @@ typedef struct {
     int num_lights, num_emissive, num_emissive_cdf;
     float exposure;
     int width, height, has_env;
+    float fov_scale;
 } SceneGpu;
 
 typedef struct {
@@ -98,18 +99,19 @@ typedef struct {
     float col[3];
     float ref;
     float ior;
+    float roughness;
     int mat_type;
     int tex_type;
     float tex_scale;
     float tex_color2[3];
 } MeshMatGpu;
 
-static_assert(sizeof(SphereGpu) == 60, "SphereGpu layout must match shaders.metal");
+static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
 static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.metal");
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
-static_assert(sizeof(SceneGpu) == 44, "SceneGpu layout must match shaders.metal");
+static_assert(sizeof(SceneGpu) == 48, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 44, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 48, "MeshMatGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
 static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -197,10 +199,11 @@ Image* render_frame_gpu(const Scene* scene) {
          SphereGpu* spheres = (SphereGpu*)calloc(scene->num_spheres > 0 ? scene->num_spheres : 1, sizeof(SphereGpu));
          for (int i = 0; i < scene->num_spheres; i++) {
              const Sphere* s = &scene->spheres[i];
-             spheres[i].c[0] = s->pos.x; spheres[i].c[1] = s->pos.y; spheres[i].c[2] = s->pos.z;
+              spheres[i].c[0] = s->pos.x; spheres[i].c[1] = s->pos.y; spheres[i].c[2] = s->pos.z;
              spheres[i].r = s->radius;
              spheres[i].ref = s->reflectivity;
              spheres[i].ior = s->ior;
+             spheres[i].roughness = s->roughness;
              spheres[i].col[0] = s->color.x; spheres[i].col[1] = s->color.y; spheres[i].col[2] = s->color.z;
              spheres[i].mat_type = gpu_mat_name_to_type(gpu_material(s, 1));
              spheres[i].tex_type = s->tex_type;
@@ -271,10 +274,11 @@ Image* render_frame_gpu(const Scene* scene) {
              mats = (MeshMatGpu*)calloc(scene->num_meshes, sizeof(MeshMatGpu));
              for (int m = 0; m < scene->num_meshes; m++) {
                  const MeshObj* mo = &scene->meshes[m];
-                 mats[m].col[0] = mo->color.x; mats[m].col[1] = mo->color.y; mats[m].col[2] = mo->color.z;
-                 mats[m].ref = mo->reflectivity;
-                 mats[m].ior = mo->ior;
-                 mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
+                  mats[m].col[0] = mo->color.x; mats[m].col[1] = mo->color.y; mats[m].col[2] = mo->color.z;
+                  mats[m].ref = mo->reflectivity;
+                  mats[m].ior = mo->ior;
+                  mats[m].roughness = mo->roughness;
+                  mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;
                  mats[m].tex_color2[0] = mo->tex_color2.x; mats[m].tex_color2[1] = mo->tex_color2.y; mats[m].tex_color2[2] = mo->tex_color2.z;
@@ -348,10 +352,15 @@ Image* render_frame_gpu(const Scene* scene) {
          sc.num_lights = scene->num_lights;
          sc.num_emissive = num_emissive;
          sc.num_emissive_cdf = num_emissive_cdf;
-         sc.exposure = scene->exposure;
-         sc.width = W;
-         sc.height = H;
-         sc.has_env = scene->env_file[0] ? 1 : 0;
+          sc.exposure = scene->exposure;
+          sc.width = W;
+          sc.height = H;
+          sc.has_env = scene->env_file[0] ? 1 : 0;
+          sc.fov_scale = tanf(scene->fov_y * 0.5f * (float)M_PI / 180.0f);
+          fprintf(stderr, "[gpu] fov_y=%.1f  fov_scale=%.6f  top_uv_y=%.6f  bottom_uv_y=%.6f\n",
+                  scene->fov_y, sc.fov_scale,
+                  (1.0f - 2.0f * 0.0f / H) * sc.fov_scale,
+                  (1.0f - 2.0f * (H - 1) / H) * sc.fov_scale);
 
           // --- GPU buffers ---
           // Never pass NULL to newBufferWithBytes with Shared storage — Metal will

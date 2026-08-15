@@ -1274,19 +1274,23 @@ static void build_gltf_scene(
                     strcpy(mo->material, "emissive");
                     mo->color = (Vec3){emissive[0], emissive[1], emissive[2]};
                     mo->reflectivity = 0.0f;
+                    mo->roughness = roughness;
                 } else if (transmission > 0.0f) {
                     strcpy(mo->material, "glass");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = 1.0f;
                     mo->ior = ior;
+                    mo->roughness = roughness;
                 } else if (metallic > 0.5f) {
                     strcpy(mo->material, "metallic");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = metallic;
+                    mo->roughness = roughness;
                 } else {
                     strcpy(mo->material, "plastic");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = metallic;
+                    mo->roughness = roughness;
                 }
 
                 /* Count triangles for this material group. */
@@ -1368,6 +1372,7 @@ static void build_gltf_scene(
             out->focus_dist = sqrtf(
                 fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
             out->aperture = 0.0f;
+            out->fov_y = cameras[ni].yfov * (180.0f / (float)M_PI);
         }
 
         /* Push children. */

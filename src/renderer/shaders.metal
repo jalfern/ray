@@ -22,6 +22,7 @@ struct SphereGpu {
     float r;
     float ref;
     float ior;
+    float roughness;
     packed_float3 col;
     int mat_type;
     int tex_type;
@@ -53,6 +54,7 @@ struct SceneGpu {
     int width;
     int height;
     int has_env;
+    float fov_scale;
 };
 
 struct EmissiveGpu {
@@ -326,6 +328,7 @@ struct MeshMat {
     packed_float3 col;
     float ref;
     float ior;
+    float roughness;
     int mat_type;
     int tex_type;
     float tex_scale;
@@ -499,7 +502,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float t_hit;
             float3 hit_n;
             float3 sc_col = float3(1.0f);
-            float sref = 0, sior = 1.5f;
+            float sref = 0, sior = 1.5f, srough = 1.0f;
             int smat = 0;
 
             if (hs && (!hf0 || ts < tf) && (!hm || ts < tm)) {
@@ -507,6 +510,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 sc_col = spheres[si].col;
                 sref = spheres[si].ref;
                 sior = spheres[si].ior;
+                srough = spheres[si].roughness;
                 smat = spheres[si].mat_type;
             } else if (hm && (!hf0 || tm < tf)) {
                 hit_type = 2; t_hit = tm;
@@ -515,6 +519,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     sc_col = mats[mesh_idx].col;
                     sref = mats[mesh_idx].ref;
                     sior = mats[mesh_idx].ior;
+                    srough = mats[mesh_idx].roughness;
                     smat = mats[mesh_idx].mat_type;
                 }
 
@@ -608,8 +613,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 float diff = max(0.0f, dot(n_hit, ld));
                 float3 vw = normalize(ro - p);
                 float3 hv = normalize(ld + vw);
-                float sp = pow(max(0.0f, dot(n_hit, hv)),
-                               (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 32.0f : 64.0f);
+                float spec_exp = 2.0f + 510.0f * (1.0f - srough) * (1.0f - srough);
+                float sp = pow(max(0.0f, dot(n_hit, hv)), spec_exp);
                 float lf = sh ? 0.0f : 1.0f;
                 float ss = (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 0.4f : 0.8f;
 
@@ -742,8 +747,8 @@ kernel void rk(
     for (int sy = 0; sy < AA_SAMPLES; sy++) {
         for (int sx = 0; sx < AA_SAMPLES; sx++) {
             int sidx = sy * AA_SAMPLES + sx;
-            float ux = (2.0f * (x + (sx + 0.5f) / AA_SAMPLES) / scene.width - 1.0f) * asp;
-            float uy = 1.0f - 2.0f * (y + (sy + 0.5f) / AA_SAMPLES) / scene.height;
+            float ux = (2.0f * (x + (sx + 0.5f) / AA_SAMPLES) / scene.width - 1.0f) * asp * scene.fov_scale;
+            float uy = (1.0f - 2.0f * (y + (sy + 0.5f) / AA_SAMPLES) / scene.height) * scene.fov_scale;
             float3 rd = normalize(fwd + right * ux + up * uy);
 
             float3 origin = cam.pos;

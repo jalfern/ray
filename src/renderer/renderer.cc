@@ -377,7 +377,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     float t_hit;
     V hit_n;
     float sphere_col[3] = {1,1,1};
-    float sphere_ref = 0, sphere_ior = 1.5f;
+    float sphere_ref = 0, sphere_ior = 1.5f, sphere_rough = 1.0f;
     int sphere_mat = 0;
 
     if (hs && (!hf || ts < tf) && (!hm || ts < tm)) {
@@ -387,6 +387,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sphere_col[2] = spheres[si].col.z;
         sphere_ref = spheres[si].ref;
         sphere_ior = spheres[si].ior;
+        sphere_rough = spheres[si].roughness;
         sphere_mat = spheres[si].mat_type;
     } else if (hm && (!hf || tm < tf)) {
         hit_type = 2; t_hit = tm; hit_n = mn;
@@ -395,6 +396,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sphere_col[2] = meshes[mi].col.z;
         sphere_ref = meshes[mi].ref;
         sphere_ior = meshes[mi].ior;
+        sphere_rough = meshes[mi].roughness;
         sphere_mat = meshes[mi].mat_type;
     } else if (hf) {
         hit_type = 3; t_hit = tf;
@@ -484,7 +486,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         V view = norm(sub(o, p));
         V half = norm(add(light_dir, view));
 
-        float spec_exp = (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 32.0f : 64.0f;
+        float spec_exp = 2.0f + 510.0f * (1.0f - sphere_rough) * (1.0f - sphere_rough);
         float spec_str = (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 0.4f : 0.8f;
         float spec = powf(fmaxf(0.0f, dot(n, half)), spec_exp);
         float lf = sf ? 0.0f : 1.0f;
@@ -591,6 +593,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
 typedef struct {
     V cam, fwd, right, up;
     float asp;
+    float fov_scale;
     float aperture;
     float focus_dist;
     SphereData* spheres;
@@ -618,8 +621,8 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                     int sample_idx = sy * AA_SAMPLES + sx;
                     float sample_x = (float)(sx + 0.5f) / AA_SAMPLES;
                     float sample_y = (float)(sy + 0.5f) / AA_SAMPLES;
-                    float uv_x = (2.0f*(x + sample_x)/ctx->width - 1.0f) * ctx->asp;
-                    float uv_y = 1.0f - 2.0f*(y + sample_y)/ctx->height;
+                    float uv_x = (2.0f*(x + sample_x)/ctx->width - 1.0f) * ctx->asp * ctx->fov_scale;
+                    float uv_y = (1.0f - 2.0f*(y + sample_y)/ctx->height) * ctx->fov_scale;
                     V ray_dir = norm(add(add(ctx->fwd, mul(ctx->right, uv_x)), mul(ctx->up, uv_y)));
 
                     V origin = ctx->cam;
@@ -667,6 +670,7 @@ static RenderContext setup_context(const Scene* scene) {
         spheres[i].r = scene->spheres[i].radius;
         spheres[i].ref = scene->spheres[i].reflectivity;
         spheres[i].ior = scene->spheres[i].ior;
+        spheres[i].roughness = scene->spheres[i].roughness;
         spheres[i].col = (V){scene->spheres[i].color.x, scene->spheres[i].color.y, scene->spheres[i].color.z};
         const char* mat = scene->spheres[i].material[0] ? scene->spheres[i].material : "glass";
         spheres[i].mat_type = mat_name_to_type(mat);
@@ -685,6 +689,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].col = (V){scene->meshes[i].color.x, scene->meshes[i].color.y, scene->meshes[i].color.z};
             meshes[i].ref = scene->meshes[i].reflectivity;
             meshes[i].ior = scene->meshes[i].ior;
+            meshes[i].roughness = scene->meshes[i].roughness;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;
@@ -796,6 +801,11 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.right = norm(cross(world_up, ctx.fwd));
     ctx.up = cross(ctx.fwd, ctx.right);
     ctx.asp = (float)scene->width / scene->height;
+    ctx.fov_scale = tanf(scene->fov_y * 0.5f * (float)M_PI / 180.0f);
+    fprintf(stderr, "[renderer] fov_y=%.1f  fov_scale=%.6f  top_uv_y=%.6f  bottom_uv_y=%.6f\n",
+            scene->fov_y, ctx.fov_scale,
+            (1.0f - 2.0f * 0.0f / scene->height) * ctx.fov_scale,
+            (1.0f - 2.0f * (scene->height - 1) / scene->height) * ctx.fov_scale);
     ctx.exposure = scene->exposure;
     ctx.width = scene->width;
     ctx.height = scene->height;

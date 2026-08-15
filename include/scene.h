@@ -12,6 +12,7 @@ typedef struct {
     float radius;
     float reflectivity;
     float ior;
+    float roughness;
     Vec3 color;
     char material[16];
     int tex_type;
@@ -26,6 +27,7 @@ typedef struct {
     float scale;
     float reflectivity;
     float ior;
+    float roughness;
     Vec3 color;
     char material[16];
     int tex_type;
@@ -51,6 +53,7 @@ typedef struct {
     Vec3 camera_target;
     float aperture;
     float focus_dist;
+    float fov_y;
     Light* lights;
     int num_lights;
     Sphere* spheres;

@@ -64,11 +64,8 @@ make test     # Render all test scenes
 | Punctual lights (KHR_lights_punctual) | — |
 | KHR_materials_iridescence | — |
 | glTF texture/color from baseColorTexture | — |
-
-## Known Limitations
-
-- **Glass traversal parity:** CPU uses recursive tracing, GPU uses iterative stack — transmitted light paths can diverge (both backends produce valid images, but refracted paths may differ)
-- **Scale-relative ray-triangle test:** The old absolute EPS=1e-4 threshold rejected small triangles regardless of ray direction. Now uses `|det| < 1e-7 * mean(|e1|², |e2|²)` — verified against IridescenceLamp's glass sphere (5,632 tris, ~0.01-unit edges).
+| **Roughness plumbed through** (parsed → scene → GPU/CPU shaders) | Done |
+| **Configurable FOV** (`fov_y` in scene JSON, default 90°) | Done |
 
 ## Debug Flags
 

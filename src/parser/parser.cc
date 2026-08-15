@@ -72,6 +72,7 @@ static char* parse_sphere(char* p, Sphere* s) {
     s->color = (Vec3){1.0f, 1.0f, 1.0f};
     s->tex_color2 = (Vec3){0, 0, 0};
     s->ior = 1.5f;
+    s->roughness = 1.0f;
     s->tex_type = 0;
     s->tex_scale = 1.0f;
     strcpy(s->material, "glass");
@@ -215,6 +216,7 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
     m->tex_color2 = (Vec3){0, 0, 0};
     m->reflectivity = 0.3f;
     m->ior = 1.5f;
+    m->roughness = 1.0f;
     m->scale = 1.0f;
     m->pos = (Vec3){0, 0, 0};
     m->tris = NULL;
@@ -363,6 +365,7 @@ Scene* parse_scene(const char* filename) {
     scene->width = 400;
     scene->height = 400;
     scene->exposure = 1.0f;
+    scene->fov_y = 90.0f;
     scene->denoise = 0;
     scene->denoise_strength = 1.0f;
     scene->env_file[0] = '\0';
@@ -448,6 +451,8 @@ Scene* parse_scene(const char* filename) {
                     p = parse_float(p, &scene->aperture);
                 } else if (strcmp(ckey, "focus_dist") == 0) {
                     p = parse_float(p, &scene->focus_dist);
+                } else if (strcmp(ckey, "fov_y") == 0) {
+                    p = parse_float(p, &scene->fov_y);
                 } else {
                     while (*p && *p != ',' && *p != '}') p++;
                 }
@@ -487,6 +492,7 @@ Scene* parse_scene(const char* filename) {
                     scene->camera_target = gs.camera_target;
                     scene->aperture = gs.aperture;
                     scene->focus_dist = gs.focus_dist;
+                    scene->fov_y = gs.fov_y;
                 }
             }
             free_gltf(&gs);
@@ -582,6 +588,10 @@ Scene* parse_scene(const char* filename) {
         scene->lights[0].size = 0;
     }
 
+    fprintf(stderr, "[parser] final camera_pos=(%.6f, %.6f, %.6f) target=(%.6f, %.6f, %.6f) fov_y=%.1f\n",
+            scene->camera_pos.x, scene->camera_pos.y, scene->camera_pos.z,
+            scene->camera_target.x, scene->camera_target.y, scene->camera_target.z,
+            scene->fov_y);
     free(json);
     return scene;
 }
