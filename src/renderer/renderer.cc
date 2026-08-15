@@ -511,6 +511,27 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             sc = (m_uv[0] != 0 || m_uv[1] != 0) ? eval_texture_uv(uv, sc, &meshes[mi].tex)
                                                  : eval_texture(p, sc, &meshes[mi].tex);
         }
+        /* Override roughness from ORM texture G channel (linear data). */
+        if (meshes[mi].orm_tex_index >= 0 && meshes[mi].orm_tex_index < num_textures && textures) {
+            ImageTexture* orm = &textures[meshes[mi].orm_tex_index];
+            float u = m_uv[0] - floorf(m_uv[0]);
+            float v = m_uv[1] - floorf(m_uv[1]);
+            float fx = u * orm->width - 0.5f;
+            float fy = v * orm->height - 0.5f;
+            int ix = (int)floorf(fx), iy = (int)floorf(fy);
+            float rx = fx - ix, ry = fy - iy;
+            int x0 = (ix + orm->width * 1024) % orm->width;
+            int y0 = (iy + orm->height * 1024) % orm->height;
+            int x1 = (x0 + 1) % orm->width;
+            int y1 = (y0 + 1) % orm->height;
+            unsigned char* d = orm->data;
+            float g00 = d[(y0 * orm->width + x0) * 4 + 1] / 255.0f;
+            float g10 = d[(y0 * orm->width + x1) * 4 + 1] / 255.0f;
+            float g01 = d[(y1 * orm->width + x0) * 4 + 1] / 255.0f;
+            float g11 = d[(y1 * orm->width + x1) * 4 + 1] / 255.0f;
+            float orm_g = (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
+            sphere_rough = sphere_rough * orm_g;
+        }
     }
 
     if (mat == MAT_EMISSIVE) return sc;
@@ -737,6 +758,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].ior = scene->meshes[i].ior;
             meshes[i].roughness = scene->meshes[i].roughness;
             meshes[i].tex_index = scene->meshes[i].tex_index;
+            meshes[i].orm_tex_index = scene->meshes[i].orm_tex_index;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;

@@ -106,6 +106,7 @@ typedef struct {
     float tex_scale;
     float tex_color2[3];
     int tex_index;
+    int orm_tex_index;
 } MeshMatGpu;
 
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
@@ -113,7 +114,7 @@ static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.meta
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
 static_assert(sizeof(SceneGpu) == 52, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 52, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 56, "MeshMatGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
 static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -286,6 +287,7 @@ Image* render_frame_gpu(const Scene* scene) {
                   mats[m].ior = mo->ior;
                   mats[m].roughness = mo->roughness;
                   mats[m].tex_index = mo->tex_index;
+                  mats[m].orm_tex_index = mo->orm_tex_index;
                   mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;
@@ -430,6 +432,31 @@ Image* render_frame_gpu(const Scene* scene) {
               baseColorTex = [gpu_device newTextureWithDescriptor:td];
           }
 
+          // --- ORM texture ---
+          id<MTLTexture> ormTex = nil;
+          for (int i = 0; i < scene->num_textures && !ormTex; i++) {
+              ImageTexture* it = &scene->textures[i];
+              if (it != &scene->textures[0] && it->data && it->width > 0 && it->height > 0) {
+                  MTLTextureDescriptor* td =
+                      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                        width:it->width height:it->height mipmapped:NO];
+                  td.usage = MTLTextureUsageShaderRead;
+                  td.storageMode = MTLStorageModeShared;
+                  ormTex = [gpu_device newTextureWithDescriptor:td];
+                  if (ormTex) {
+                      MTLRegion region = MTLRegionMake2D(0, 0, it->width, it->height);
+                      [ormTex replaceRegion:region mipmapLevel:0 withBytes:it->data bytesPerRow:it->width * 4];
+                  }
+              }
+          }
+          if (!ormTex) {
+              MTLTextureDescriptor* td =
+                  [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                    width:1 height:1 mipmapped:NO];
+              td.usage = MTLTextureUsageShaderRead;
+              ormTex = [gpu_device newTextureWithDescriptor:td];
+          }
+
           free(spheres); free(lights); free(emissive); free(mats); free(emissive_cdf);
           free(all_tris); free(all_bvh);
 
@@ -449,6 +476,7 @@ Image* render_frame_gpu(const Scene* scene) {
          [enc setBuffer:cdfBuf offset:0 atIndex:9];
           [enc setTexture:envTex atIndex:0];
           [enc setTexture:baseColorTex atIndex:1];
+          [enc setTexture:ormTex atIndex:2];
 
          MTLSize tg = MTLSizeMake(16, 16, 1);
          MTLSize grid = MTLSizeMake(W, H, 1);

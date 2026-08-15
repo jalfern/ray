@@ -335,6 +335,7 @@ struct MeshMat {
     float tex_scale;
     packed_float3 tex_color2;
     int tex_index;
+    int orm_tex_index;
 };
 
 static float hash3(float x, float y, float z) {
@@ -455,7 +456,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         device const float* emissive_cdf, int ncdf,
                         int sample_idx, int num_textures,
                         texture2d<float> env_tex, int has_env,
-                        texture2d<float> base_color_tex) {
+                        texture2d<float> base_color_tex,
+                        texture2d<float> orm_tex) {
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
@@ -614,6 +616,11 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                             ? eval_texture_uv(mesh_uv, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2)
                             : eval_texture(p, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2);
                     }
+                    /* Override roughness from ORM texture G channel (linear data). */
+                    if (mats[midx].orm_tex_index >= 0 && mats[midx].orm_tex_index < num_textures) {
+                        float orm_g = sample_base_color(orm_tex, mesh_uv).g;
+                        srough = srough * orm_g;
+                    }
                 }
             }
 
@@ -750,6 +757,7 @@ kernel void rk(
     device const float* emissive_cdf [[buffer(9)]],
     texture2d<float> env_tex [[texture(0)]],
     texture2d<float> base_color_tex [[texture(1)]],
+    texture2d<float> orm_tex [[texture(2)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -790,7 +798,8 @@ kernel void rk(
                              emissive_cdf, scene.num_emissive_cdf,
                              sidx, scene.num_textures,
                              env_tex, scene.has_env,
-                             base_color_tex);
+                             base_color_tex,
+                             orm_tex);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

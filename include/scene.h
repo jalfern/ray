@@ -40,6 +40,7 @@ typedef struct {
     float tex_scale;
     Vec3 tex_color2;
     int tex_index;
+    int orm_tex_index;
 } MeshObj;
 
 typedef struct {

@@ -765,6 +765,7 @@ typedef struct {
     float ior;             /* 1.0-3.0, default 1.5 */
     int base_color_tex;    /* texture index, -1 = none */
     int tex_coord;         /* UV set index (0 = TEXCOORD_0) */
+    int metallic_roughness_tex; /* texture index, -1 = none */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1046,6 +1047,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].ior = 1.5f;
         mats[n].base_color_tex = -1;
         mats[n].tex_coord = 0;
+        mats[n].metallic_roughness_tex = -1;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1090,6 +1092,28 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                                 if (parse_json_number(&tx, &fv)) mats[n].base_color_tex = (int)fv;
                             } else if (strcmp(tk, "texCoord") == 0) {
                                 if (parse_json_number(&tx, &fv)) mats[n].tex_coord = (int)fv;
+                            } else {
+                                skip_value(&tx);
+                            }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ',') tx++;
+                        }
+                        if (*tx == '}') tx++;
+                        p = tx;
+                    } else if (strcmp(pk, "metallicRoughnessTexture") == 0) {
+                        const char* tx = p;
+                        skip_ws_ptr(&tx);
+                        if (*tx == '{') tx++;
+                        while (*tx && *tx != '}') {
+                            char tk[64];
+                            const char* tsave = tx;
+                            if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ':') tx++;
+                            skip_ws_ptr(&tx);
+                            float fv;
+                            if (strcmp(tk, "index") == 0) {
+                                if (parse_json_number(&tx, &fv)) mats[n].metallic_roughness_tex = (int)fv;
                             } else {
                                 skip_value(&tx);
                             }
@@ -1398,6 +1422,7 @@ static void build_gltf_scene(
                 mo->tex_scale = 1.0f;
                 mo->tex_color2 = (Vec3){0, 0, 0};
                 mo->tex_index = -1;
+                mo->orm_tex_index = -1;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1450,17 +1475,29 @@ static void build_gltf_scene(
                     mo->roughness = roughness;
                 }
 
-                /* Use image texture from glTF if available, else checker for UV verification. */
-                if (mat_idx >= 0 && mat_idx < num_materials && materials[mat_idx].base_color_tex >= 0) {
-                    int tex_idx = materials[mat_idx].base_color_tex;
-                    if (tex_idx < num_tex) {
-                        int img_idx = tex_to_img[tex_idx];
-                        if (img_idx >= 0 && img_idx < num_texs) {
-                            mo->tex_type = 0;
-                            mo->tex_index = img_idx;
+                /* Use image textures from glTF if available, else checker for UV verification. */
+                if (mat_idx >= 0 && mat_idx < num_materials) {
+                    if (materials[mat_idx].base_color_tex >= 0) {
+                        int tex_idx = materials[mat_idx].base_color_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs) {
+                                mo->tex_type = 0;
+                                mo->tex_index = img_idx;
+                            }
                         }
                     }
-                } else {
+                    if (materials[mat_idx].metallic_roughness_tex >= 0) {
+                        int tex_idx = materials[mat_idx].metallic_roughness_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs) {
+                                mo->orm_tex_index = img_idx;
+                            }
+                        }
+                    }
+                }
+                if (mo->tex_type == 0 && mo->tex_index < 0) {
                     mo->tex_type = 1;
                     mo->tex_scale = 8.0f;
                 }
