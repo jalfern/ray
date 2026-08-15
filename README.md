@@ -14,9 +14,10 @@ make test     # Render all test scenes
 ## Usage
 
 ```bash
-./ray2 scenes/scene.json          # Output PPM to stdout, PNG to file specified in scene.json
+./ray2 scenes/scene.json              # Output PPM to stdout, PNG to file
 ./ray2 scenes/custom.json > image.ppm  # Override output to stdout
-./ray2 --cpu scenes/scene.json    # Force CPU rendering
+./ray2 --cpu scenes/scene.json        # Force CPU rendering
+./ray2 --mesh-stats scenes/scene.json # Run diagnostics (geometry, BVH, materials)
 ```
 
 ## Project Layout
@@ -28,13 +29,16 @@ make test     # Render all test scenes
 ├── videos/              # Rendered animation videos
 ├── src/
 │   ├── main.cc          # Entry point, animation loop
-│   ├── parser/          # JSON scene + OBJ parsing
+│   ├── parser/          # JSON scene + OBJ + glTF parsing
 │   ├── renderer/        # Ray tracing core (CPU + Metal GPU)
 │   ├── shading/         # Material properties, floor pattern
 │   ├── vector/          # 3D vector math
 │   └── output/          # PPM/PNG writers
 ├── include/             # Shared type definitions
-└── tools/               # Mesh generators (torus, ico sphere, vase)
+├── tools/               # Mesh generators (torus, ico sphere, vase)
+├── web_viewer/          # Three.js-based glTF viewer (npm run dev)
+├── test_scenes/         # glTF test models + scene JSON files
+└── envmaps/             # HDR environment maps
 ```
 
 ## Features
@@ -54,21 +58,35 @@ make test     # Render all test scenes
 | Denoiser | Done |
 | Animation (orbit camera) | Done |
 | **glTF 2.0 importer** (core spec) | Done |
-| Punctual lights from glTF (KHR_lights_punctual) | — |
-| Transmission / IOR from glTF (KHR_materials_transmission/ior) | — |
+| KHR_materials_transmission (glass) | Done |
+| KHR_materials_ior | Done |
+| KHR_materials_volume (thickness) | Parsed |
+| Punctual lights (KHR_lights_punctual) | — |
+| KHR_materials_iridescence | — |
+| glTF texture/color from baseColorTexture | — |
 
 ## Known Limitations
 
 - **Glass traversal parity:** CPU uses recursive tracing, GPU uses iterative stack — transmitted light paths can diverge (both backends produce valid images, but refracted paths may differ)
+- **Scale-relative ray-triangle test:** The old absolute EPS=1e-4 threshold rejected small triangles regardless of ray direction. Now uses `|det| < 1e-7 * mean(|e1|², |e2|²)` — verified against IridescenceLamp's glass sphere (5,632 tris, ~0.01-unit edges).
+
+## Debug Flags
+
+| Flag | Effect |
+|------|--------|
+| `--cpu` | Force CPU rendering path |
+| `--mesh-stats` | Print geometry, BVH, material, and intersection diagnostics |
+| `--threads N` | Set CPU thread count |
 
 ## Next Steps
 
 ### Short term
-- **glTF extensions:** KHR_materials_transmission (glass), KHR_materials_ior, KHR_lights_punctual
+- **glTF baseColorTexture sampling** — all IridescenceLamp materials reference textures but the parser never feeds them to the shader
+- **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials
 - **Normal mapping** for increased surface detail
 
 ### Longer term
 - **True area lights** — softer, more realistic shadows
 - **GPU animation** — currently falls back to CPU
 - **JSON schema validation** for scene files
-- **Interactive viewer**
+- **Web viewer diff panel** — load mesh_stats.json alongside Three.js data for automated comparison
