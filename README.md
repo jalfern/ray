@@ -60,11 +60,12 @@ make test     # Render all test scenes
 | **glTF 2.0 importer** (core spec) | Done |
 | KHR_materials_transmission (glass) | Done |
 | KHR_materials_ior | Done |
-| KHR_materials_volume (thickness) | Parsed |
+| KHR_materials_volume (thickness) | Parsed, unused |
 | Punctual lights (KHR_lights_punctual) | — |
-| KHR_materials_iridescence | — |
-| glTF texture/color from baseColorTexture | Done |
-| **Roughness plumbed through** (parsed → scene → GPU/CPU shaders) | Done |
+| KHR_materials_iridescence | Not implemented (Phase 2 below) |
+| glTF baseColorTexture (sRGB→linear, bilinear) | Done |
+| glTF ORM roughness (G channel × factor) | Done (CPU/GPU parity bug — nextsteps.md) |
+| glTF per-pixel metallic (B) / AO (R) | Not done (Phase 1 below) |
 | **Configurable FOV** (`fov_y` in scene JSON, default 90°) | Done |
 | **Image texture loading** (PNG/JPEG via stb_image) | Done |
 | **sRGB→linear conversion + bilinear sampling** | Done |
@@ -79,10 +80,23 @@ make test     # Render all test scenes
 
 ## Next Steps
 
-### Short term
-- **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials
-- **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials
-- **Normal mapping** for increased surface detail
+Material/texture work is anchored on **IridescenceLamp** (Khronos sample:
+3 materials, base color + ORM + iridescence-thickness textures,
+transmission/ior/volume/iridescence extensions). Full phased plan and bug
+status in [nextsteps.md](nextsteps.md).
+
+### Phase 1 — Per-pixel PBR (foundation)
+- Fix ORM roughness CPU/GPU parity bug (GPU sRGB-converts a linear texture)
+- Per-pixel metallic from ORM B channel, AO from ORM R channel
+- Merge plastic/metallic material classes into one PBR branch:
+  `diffuse × (1−metallic)`, `F0 = mix(0.04, basecolor, metallic)`
+
+### Phase 2 — KHR_materials_iridescence
+- Parse extension (factor, IOR, thickness min/max, thickness texture)
+- Load thickness texture; thin-film interference tint on the specular lobe
+
+### Phase 3 — Volume absorption
+- Use `KHR_materials_volume` thickness in the glass transmission path
 
 ### Longer term
 - **True area lights** — softer, more realistic shadows

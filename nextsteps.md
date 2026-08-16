@@ -20,8 +20,20 @@
 - **KHR_materials_transmission:** Parsed and applied. Mesh 1 classified as "glass"
   with `transmission=1.0`, `ior=1.6`.
 - **KHR_materials_ior:** Parsed and applied. IOR per-material (1.6 for the glass sphere).
-- **KHR_materials_volume:** Parsed but not yet used by the shader.
-- **KHR_materials_iridescence:** Parsed but not applied — no shader path exists.
+- **KHR_materials_volume:** Parsed (`thicknessFactor`) but not used by the shader.
+- **KHR_materials_iridescence:** **Not parsed** — the extension object is silently
+  skipped in `gltf_parser.cc`. No iridescence fields exist on `GltfMaterial`, and
+  the thickness texture (IridescenceLamp image idx 2) is never loaded into any
+  mesh. (Earlier docs incorrectly stated this was "parsed".)
+
+### glTF Textures
+- **baseColorTexture:** Done — sRGB→linear, bilinear, wrap-repeat, both backends.
+- **metallicRoughnessTexture (ORM):** G channel (roughness) × `roughnessFactor`,
+  both backends. B (metallic) and R (occlusion/AO) are **ignored**.
+  CPU/GPU parity bug on the G channel — see "Open Bugs" below.
+- **occlusionTexture:** References the same ORM texture in IridescenceLamp;
+  unused (R channel ignored).
+- **normalTexture / emissiveTexture:** Not implemented (IridescenceLamp uses neither).
 
 ### Diagnostics Infrastructure
 - **`--mesh-stats` flag:** Triggers comprehensive diagnostic output at every pipeline stage.
@@ -42,15 +54,64 @@
 
 ## Potential Next Steps
 
-### Short Term
-- **glTF baseColorTexture sampling** — all IridescenceLamp materials reference textures
-  but the parser never feeds them to the shader. Highest visual impact.
-- **KHR_materials_iridescence** — parsed but not applied; affects all three lamp materials.
-- **KHR_materials_volume thickness** — parsed but unused by the shader.
+Material/texture plan, anchored on **IridescenceLamp**
+(`test_scenes/IridescenceLamp/`, scene `test_scenes/scene_lamp.json`). The
+model exercises every open item: three materials (metal shade, transmission
+glass sphere with iridescence, iridescent body), plus base color + ORM +
+iridescence-thickness textures. The other test scenes (Box, Suzanne, Lantern,
+...) use none of these extensions.
+
+### Open Bugs
+1. **ORM roughness CPU/GPU parity.** CPU `renderer.cc:516-533` reads ORM bytes
+   directly (correct — glTF ORM is linear data). GPU `shaders.metal:621` samples
+   through `sample_base_color()` (:443), which applies an sRGB→linear
+   conversion, so GPU roughness values are systematically off.
+   **Fix:** add a linear (non-sRGB) sampler for the ORM texture on the GPU side.
+
+### Phase 1 — Per-pixel PBR foundation
+Goal: plastic/metallic become one PBR material parameterized per pixel, which
+is how glTF actually expresses it. IridescenceLamp's materials have no explicit
+`metallicFactor`, so the spec default (1.0) currently classifies the shade and
+body as hard `MAT_METALLIC` mirrors (`gltf_parser.cc:1466`) — the ORM B channel
+carrying the real per-pixel metalness is never consulted.
+
+1. Fix the ORM parity bug above.
+2. Add per-pixel `metallic = ORM.B × metallicFactor` and `ao = ORM.R` —
+   new fields on CPU `MeshObjData` (`include/types.h`) and GPU `MeshMat`
+   (`shaders.metal` + upload in `gpu_renderer.mm`).
+3. Merge `MAT_PLASTIC` / `MAT_METALLIC` in both shading paths:
+   diffuse `basecolor × (1−metallic) × N·L`,
+   specular `F0 = mix(0.04, basecolor, metallic)`.
+   `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes.
+4. Multiply AO into the ambient and per-light diffuse terms.
+5. Verify: CPU/GPU pixel diff of `scene_lamp.json` (baseline noise level:
+   ~51k AE documented under Investigation Log).
+
+### Phase 2 — KHR_materials_iridescence
+The visual payoff of the model; the extension is not even parsed today.
+
+1. **Parse:** extend `GltfMaterial` (`gltf_parser.cc:759`) with
+   `iridescenceFactor`, `iridescenceIor`, `iridescenceThicknessMin/Max`,
+   `iridescenceThicknessTex`; read the extension in `parse_materials`.
+   IridescenceLamp values: sphere ior 2.0 / 385–405 nm, body ior 1.8 / 485–515 nm,
+   both with thickness texture idx 2.
+2. **Load:** thickness texture (image idx 2, **linear data**) into the texture
+   array; new `iri_tex_index` per mesh, mirroring the `orm_tex_index` plumbing
+   (`MeshObj` → `MeshObjData` → `MeshMat`).
+3. **Shader (both backends):** thin-film interference tint on the
+   specular/reflection lobe. 3-wavelength analytic thin-film model (~2
+   internal bounces), thickness = `min + (max−min) × texel`, `cos θ₂` via
+   Snell's law at the extension IOR; add the tint weighted by
+   `iridescenceFactor` (angle blend per the KHR reference shader).
+
+### Phase 3 — KHR_materials_volume absorption
+`thicknessFactor` (0.005 on the lamp sphere) → Beer–Lambert absorption in the
+transmission path. Low visual impact on this model — do after Phase 2.
 
 ### Medium Term
-- **Normal mapping** for increased surface detail.
 - **Punctual lights (KHR_lights_punctual)** from glTF.
+- **Normal mapping** — not needed for IridescenceLamp (no `normalTexture` in
+  the file); pursue with a model that uses one.
 - **BVH acceleration improvements** for complex scenes.
 
 ### Longer Term
@@ -131,8 +192,10 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 ### glTF Importer
 - **Core spec:** Full glTF 2.0 importer (buffers, views, accessors, meshes, nodes, cameras,
   materials, scenes, transforms).
-- **Extensions:** KHR_materials_transmission, KHR_materials_ior, KHR_materials_volume
-  parsed and applied. KHR_materials_iridescence parsed but not rendered.
+- **Extensions:** KHR_materials_transmission, KHR_materials_ior parsed and
+  applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence not
+  parsed. Textures: baseColorTexture + ORM roughness (G) wired on both
+  backends; metallic (B) / AO (R) not yet implemented (Phase 1).
 - **Diagnostics:** `--mesh-stats` flag, per-mesh degenerate triangle analysis, accessor
   metadata, index range checks, JSON output to `mesh_stats.json`.
 - **Tested with:** Box, Suzanne, Lantern, WaterBottle, Avocado, BoomBox,

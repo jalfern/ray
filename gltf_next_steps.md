@@ -1,3 +1,8 @@
+> **SUPERSEDED (2026-08-16).** Phase 1 bugs are all fixed (see `nextsteps.md`).
+> Phase 2 transmission/ior is done; texture support is partway done (base color +
+> ORM roughness). The current material/texture plan (per-pixel PBR, iridescence)
+> lives in `nextsteps.md` → "Potential Next Steps".
+
 # glTF Next Steps — Bugs & Extensions
 
 ## Phase 1: Fix Open Bugs (affect all rendering, including glTF)

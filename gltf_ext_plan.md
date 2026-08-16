@@ -1,3 +1,6 @@
+> **STATUS: COMPLETE.** Transmission + IOR implemented and committed (`ba9837d`).
+> Next material work (per-pixel PBR, iridescence) is planned in `nextsteps.md`.
+
 # glTF Extension Plan: KHR_materials_transmission + KHR_materials_ior
 
 ## Goal
