@@ -11,7 +11,7 @@
 - **glTF roughness default:** Changed from 0.0 to 1.0 (per spec). Roughness 0.0 made
   every material a perfect mirror, rendering black without environment lighting.
 - **mesh_idx at import:** `mesh_idx` is now correctly set at parser time
-  (`gltf_parser.cc:1329`, was always 0). Survives BVH reordering via TriGpu memcpy.
+  (`gltf_parser.cc:1562`, was always 0). Survives BVH reordering via TriGpu memcpy.
 - **EmissiveGpu range fix:** `tri_start`/`tri_end` on the GPU path were set from
   pre-BVH `tri_offset` but used after BVH reordering scattered triangles. Fixed by
   scanning the combined array for matching `mesh_idx` after BVH build.
@@ -62,17 +62,20 @@ iridescence-thickness textures. The other test scenes (Box, Suzanne, Lantern,
 ...) use none of these extensions.
 
 ### Open Bugs
-1. **ORM roughness CPU/GPU parity.** CPU `renderer.cc:516-533` reads ORM bytes
-   directly (correct — glTF ORM is linear data). GPU `shaders.metal:621` samples
-   through `sample_base_color()` (:443), which applies an sRGB→linear
-   conversion, so GPU roughness values are systematically off.
+1. **ORM roughness CPU/GPU parity.** CPU `renderer.cc` (ORM roughness
+   override block in the mesh-hit shading path) reads ORM bytes
+   directly (correct — glTF ORM is linear data). GPU `shaders.metal` (ORM
+   roughness override in trace_ray, calls `sample_base_color`) samples
+   through that function, which applies an sRGB→linear conversion,
+   so GPU roughness values are systematically off.
    **Fix:** add a linear (non-sRGB) sampler for the ORM texture on the GPU side.
 
 ### Phase 1 — Per-pixel PBR foundation
 Goal: plastic/metallic become one PBR material parameterized per pixel, which
 is how glTF actually expresses it. IridescenceLamp's materials have no explicit
 `metallicFactor`, so the spec default (1.0) currently classifies the shade and
-body as hard `MAT_METALLIC` mirrors (`gltf_parser.cc:1466`) — the ORM B channel
+body as hard `MAT_METALLIC` mirrors (`gltf_parser.cc`, metallic/plastic
+class-split branch, `else if (metallic > 0.5f)`) — the ORM B channel
 carrying the real per-pixel metalness is never consulted.
 
 1. Fix the ORM parity bug above.
@@ -90,7 +93,7 @@ carrying the real per-pixel metalness is never consulted.
 ### Phase 2 — KHR_materials_iridescence
 The visual payoff of the model; the extension is not even parsed today.
 
-1. **Parse:** extend `GltfMaterial` (`gltf_parser.cc:759`) with
+1. **Parse:** extend the `GltfMaterial` struct (`gltf_parser.cc`) with
    `iridescenceFactor`, `iridescenceIor`, `iridescenceThicknessMin/Max`,
    `iridescenceThicknessTex`; read the extension in `parse_materials`.
    IridescenceLamp values: sphere ior 2.0 / 385–405 nm, body ior 1.8 / 485–515 nm,
