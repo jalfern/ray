@@ -448,6 +448,14 @@ static float3 sample_base_color(texture2d<float> tex, float2 uv) {
     return float3(srgb_to_linear(sample.r), srgb_to_linear(sample.g), srgb_to_linear(sample.b));
 }
 
+/* ORM data is linear (not color) — sample raw, no transfer function. */
+static float3 sample_linear(texture2d<float> tex, float2 uv) {
+    constexpr sampler s(filter::linear, address::repeat);
+    float u = uv.x - floor(uv.x);
+    float v = uv.y - floor(uv.y);
+    return tex.sample(s, float2(u, v)).rgb;
+}
+
 static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int sc,
                         device const TriGpu* tris, int tc, device const BvhNode* bvh, int nb,
                         device const MeshMat* mats, int nm,
@@ -618,7 +626,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     }
                     /* Override roughness from ORM texture G channel (linear data). */
                     if (mats[midx].orm_tex_index >= 0 && mats[midx].orm_tex_index < num_textures) {
-                        float orm_g = sample_base_color(orm_tex, mesh_uv).g;
+                        float orm_g = sample_linear(orm_tex, mesh_uv).g;
                         srough = srough * orm_g;
                     }
                 }
