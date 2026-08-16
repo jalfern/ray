@@ -87,8 +87,8 @@ carrying the real per-pixel metalness is never consulted.
    specular `F0 = mix(0.04, basecolor, metallic)`.
    `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes.
 4. Multiply AO into the ambient and per-light diffuse terms.
-5. Verify: CPU/GPU pixel diff of `scene_lamp.json` (baseline noise level:
-   ~51k AE documented under Investigation Log).
+5. Verify: CPU/GPU pixel diff of `scene_lamp.json` via `tools/ppm_diff.py`
+   (method + established baseline: Investigation Log, "CPU/GPU AE Baseline").
 
 ### Phase 2 — KHR_materials_iridescence
 The visual payoff of the model; the extension is not even parsed today.
@@ -181,6 +181,27 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 **AE count before fix:** 335,032 (197,586 on floor, 137,446 on sky)
 **AE count after fix:**  51,557  (    617 on floor, 50,940 on sky)
 **Floor diffs eliminated:** 196,969 (99.7% reduction)
+
+### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
+
+**Status:** BASELINE ESTABLISHED
+**Method:** `make`; render CPU (`./ray2 --cpu <scene>`) and GPU (`./ray2 <scene>`)
+with a copy of `test_scenes/scene_lamp.json` that omits the `"output"` key, so each
+writes its PPM to stdout (a `28T`/`GPU` prefix line precedes the PPM header — the
+diff tool scans for `P6\n`). Diff with `tools/ppm_diff.py`: counts pixels where any
+8-bit channel differs, and reports sum_abs_err (sum of per-channel |diff|) and max
+channel error. Both backends are deterministic (re-renders are byte-identical), so
+the count is exact, not a noise level.
+
+**Measured:** at 183750c — 132,978 differing pixels (16.91%), sum_abs_err
+12,274,209. Identical at 96266de. At 9fb7c92 (pre-ORM-parity-fix) the AE was
+267,361 (34.00%), sum_abs_err 13,096,122 — the ORM fix (96266de) halved it.
+
+**Origin check for 133,752:** a previously cited figure of 133,752 (17.0%) does not
+appear anywhere in repo history — `git log -S "133,752" -S "133752" --all` returns
+no commits, and no doc ever recorded it (the companion glass-path figure, 108,003,
+is likewise absent). It is not reproducible in any tested state (9fb7c92 / 96266de /
+183750c are all byte-deterministic). Treat **132,978** as the baseline.
 
 ### Bug Status Summary
 - **Issue 1 (Sphere emissive ~2x too dark):** FIXED
