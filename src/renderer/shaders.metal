@@ -330,6 +330,7 @@ struct MeshMat {
     float ref;
     float ior;
     float roughness;
+    float metallic;
     int mat_type;
     int tex_type;
     float tex_scale;
@@ -528,6 +529,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 hit_n;
             float3 sc_col = float3(1.0f);
             float sref = 0, sior = 1.5f, srough = 1.0f;
+            float smetal = 1.0f, sao = 1.0f;
             int smat = 0;
 
             if (hs && (!hf0 || ts < tf) && (!hm || ts < tm)) {
@@ -545,6 +547,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     sref = mats[mesh_idx].ref;
                     sior = mats[mesh_idx].ior;
                     srough = mats[mesh_idx].roughness;
+                    smetal = mats[mesh_idx].metallic;
                     smat = mats[mesh_idx].mat_type;
                 }
 
@@ -624,13 +627,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                             ? eval_texture_uv(mesh_uv, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2)
                             : eval_texture(p, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2);
                     }
-                    /* Override roughness from ORM texture G channel (linear data). */
+                    /* Override material params from ORM texture (linear data): G = roughness, B = metallic, R = AO. */
                     if (mats[midx].orm_tex_index >= 0 && mats[midx].orm_tex_index < num_textures) {
-                        float orm_g = sample_linear(orm_tex, mesh_uv).g;
-                        srough = srough * orm_g;
+                        float3 orm = sample_linear(orm_tex, mesh_uv);
+                        srough = srough * orm.g;
+                        smetal = smetal * orm.b;
+                        sao = orm.r;
                     }
                 }
             }
+
+            (void)smetal;
+            (void)sao;
 
             if (mat == MAT_EMISSIVE) {
                 accum += sc_col * thru;

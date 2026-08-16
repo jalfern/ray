@@ -1457,22 +1457,26 @@ static void build_gltf_scene(
                     mo->color = (Vec3){emissive[0], emissive[1], emissive[2]};
                     mo->reflectivity = 0.0f;
                     mo->roughness = roughness;
+                    mo->metallic = metallic;
                 } else if (transmission > 0.0f) {
                     strcpy(mo->material, "glass");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = 1.0f;
                     mo->ior = ior;
                     mo->roughness = roughness;
+                    mo->metallic = metallic;
                 } else if (metallic > 0.5f) {
                     strcpy(mo->material, "metallic");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = metallic;
                     mo->roughness = roughness;
+                    mo->metallic = metallic;
                 } else {
                     strcpy(mo->material, "plastic");
                     mo->color = (Vec3){base_color[0], base_color[1], base_color[2]};
                     mo->reflectivity = metallic;
                     mo->roughness = roughness;
+                    mo->metallic = metallic;
                 }
 
                 /* Use image textures from glTF if available, else checker for UV verification. */

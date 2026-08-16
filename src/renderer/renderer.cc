@@ -417,6 +417,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V hit_n;
     float sphere_col[3] = {1,1,1};
     float sphere_ref = 0, sphere_ior = 1.5f, sphere_rough = 1.0f;
+    float sphere_metallic = 1.0f, sphere_ao = 1.0f;
     int sphere_mat = 0;
 
     if (hs && (!hf || ts < tf) && (!hm || ts < tm)) {
@@ -436,6 +437,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sphere_ref = meshes[mi].ref;
         sphere_ior = meshes[mi].ior;
         sphere_rough = meshes[mi].roughness;
+        sphere_metallic = meshes[mi].metallic;
         sphere_mat = meshes[mi].mat_type;
     } else if (hf) {
         hit_type = 3; t_hit = tf;
@@ -511,7 +513,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             sc = (m_uv[0] != 0 || m_uv[1] != 0) ? eval_texture_uv(uv, sc, &meshes[mi].tex)
                                                  : eval_texture(p, sc, &meshes[mi].tex);
         }
-        /* Override roughness from ORM texture G channel (linear data). */
+        /* Override material params from ORM texture (linear data): G = roughness, B = metallic, R = AO. */
         if (meshes[mi].orm_tex_index >= 0 && meshes[mi].orm_tex_index < num_textures && textures) {
             ImageTexture* orm = &textures[meshes[mi].orm_tex_index];
             float u = m_uv[0] - floorf(m_uv[0]);
@@ -525,14 +527,23 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             int x1 = (x0 + 1) % orm->width;
             int y1 = (y0 + 1) % orm->height;
             unsigned char* d = orm->data;
-            float g00 = d[(y0 * orm->width + x0) * 4 + 1] / 255.0f;
-            float g10 = d[(y0 * orm->width + x1) * 4 + 1] / 255.0f;
-            float g01 = d[(y1 * orm->width + x0) * 4 + 1] / 255.0f;
-            float g11 = d[(y1 * orm->width + x1) * 4 + 1] / 255.0f;
+            int p00 = (y0 * orm->width + x0) * 4, p10 = (y0 * orm->width + x1) * 4;
+            int p01 = (y1 * orm->width + x0) * 4, p11 = (y1 * orm->width + x1) * 4;
+            float r00 = d[p00] / 255.0f, g00 = d[p00 + 1] / 255.0f, b00 = d[p00 + 2] / 255.0f;
+            float r10 = d[p10] / 255.0f, g10 = d[p10 + 1] / 255.0f, b10 = d[p10 + 2] / 255.0f;
+            float r01 = d[p01] / 255.0f, g01 = d[p01 + 1] / 255.0f, b01 = d[p01 + 2] / 255.0f;
+            float r11 = d[p11] / 255.0f, g11 = d[p11 + 1] / 255.0f, b11 = d[p11 + 2] / 255.0f;
             float orm_g = (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
+            float orm_b = (1-ry)*((1-rx)*b00 + rx*b10) + ry*((1-rx)*b01 + rx*b11);
+            float orm_r = (1-ry)*((1-rx)*r00 + rx*r10) + ry*((1-rx)*r01 + rx*r11);
             sphere_rough = sphere_rough * orm_g;
+            sphere_metallic = sphere_metallic * orm_b;
+            sphere_ao = orm_r;
         }
     }
+
+    (void)sphere_metallic;
+    (void)sphere_ao;
 
     if (mat == MAT_EMISSIVE) return sc;
 
@@ -757,6 +768,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].ref = scene->meshes[i].reflectivity;
             meshes[i].ior = scene->meshes[i].ior;
             meshes[i].roughness = scene->meshes[i].roughness;
+            meshes[i].metallic = scene->meshes[i].metallic;
             meshes[i].tex_index = scene->meshes[i].tex_index;
             meshes[i].orm_tex_index = scene->meshes[i].orm_tex_index;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";

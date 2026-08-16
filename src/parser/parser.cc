@@ -217,6 +217,7 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
     m->reflectivity = 0.3f;
     m->ior = 1.5f;
     m->roughness = 1.0f;
+    m->metallic = 1.0f;
     m->scale = 1.0f;
     m->pos = (Vec3){0, 0, 0};
     m->tris = NULL;
