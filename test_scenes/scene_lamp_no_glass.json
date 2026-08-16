@@ -1,0 +1,14 @@
+{
+  "camera": {"pos": [0.0, 0.26, 1.15], "target": [0.0, 0.24, 0.0], "fov_y": 25, "aperture": 0},
+  "gltf": "IridescenceLamp/IridescenceLamp_no_sphere.gltf",
+  "lights": [
+    {"pos": [1, 1, 1], "size": 0.3},
+    {"pos": [-0.5, 0.8, -0.5], "size": 0.2}
+  ],
+  "environment": {
+    "file": "envmaps/polyhaven_haven_01_1k.hdr",
+    "intensity": 1.0
+  },
+  "width": 768,
+  "height": 1024
+}

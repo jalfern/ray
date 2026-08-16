@@ -203,6 +203,54 @@ no commits, and no doc ever recorded it (the companion glass-path figure, 108,00
 is likewise absent). It is not reproducible in any tested state (9fb7c92 / 96266de /
 183750c are all byte-deterministic). Treat **132,978** as the baseline.
 
+### Glass-Region Share of the CPU/GPU AE — scene_lamp.json (768×1024)
+
+**Status:** MEASURED
+**Goal:** attribute the 132,978-pixel AE from the baseline above to the glass
+sphere (mesh 1, lamp_transmission). A figure of 108,003 was previously cited as
+the "glass-path component" with no recorded provenance; it is **not
+reproducible** under the method below.
+
+**Method (rendered mask; renderer exposes color output only, so no object-ID
+mask exists and none was added):** build "the same scene minus the glass" by
+pointing `test_scenes/scene_lamp_no_glass.json` (identical camera/lights/env as
+`scene_lamp.json`, no floor, no `output` key so PPM goes to stdout) at
+`test_scenes/IridescenceLamp/IridescenceLamp_no_sphere.gltf` (the full glTF with
+lamp_transmission's `primitives` emptied; all other buffers/materials
+byte-identical). Mask = pixels whose rendered image changes when the glass is
+removed, ORed across both backends:
+
+    ppm_diff.py make-mask mask.ppm full_cpu.ppm noglass_cpu.ppm full_gpu.ppm noglass_gpu.ppm
+
+The CPU/GPU glass-traversal divergence can only surface in such pixels, so this
+is the correct region for spatial attribution. Residuals: the region also
+includes a few shadowed body pixels (the sphere occludes the lights), and it
+excludes only AE pixels whose glass contribution is below 1/255 (none
+measurable). Both backends and both scenes are byte-deterministic, so the whole
+pipeline is reproducible.
+
+**Region:** 147,504 px (18.76% of frame); bbox x=[51,767] y=[517,1023]
+(sphere clips the bottom-right edge of the frame). Render with
+`./ray2 --cpu test_scenes/scene_lamp_no_glass.json` / `./ray2 test_scenes/...`
+and the full scene (`scene_lamp.json` without its `output` key), 768×1024.
+
+**Measured (mask, `ppm_diff.py full_cpu full_gpu mask.ppm`):**
+- inside: 111,785 differing / sum_abs_err 12,214,931 (75.78% of region)
+- outside: 21,193 differing / sum_abs_err 59,278 (3.32% of its 638,928 px)
+- inside share of total differing: **84.06%**
+- mean error 109.3/px inside vs 2.8/px outside — clean separation between the
+  glass-path divergence and background float noise.
+
+**Cross-check (bbox region `51,517,717,507` = 363,519 px):** inside 114,692
+differing / 12,254,088 (86.25% share); the rect overcovers (sky in its
+corners), so the rendered mask is the preferred definition.
+
+**108,003 verdict:** not reproducible — the mask gives 111,785 and the bbox
+114,692; no committed run ever recorded 108,003. Treat 111,785 (rendered mask)
+as the glass-region share. It is a spatial count of differing pixels in the
+glass-influenced region, not a causal traversal-only count — that split is not
+separable from float noise out of two images.
+
 ### Bug Status Summary
 - **Issue 1 (Sphere emissive ~2x too dark):** FIXED
 - **Issue 2 (Glass + metallic ambient on CPU):** FIXED
