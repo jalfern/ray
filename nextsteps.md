@@ -74,31 +74,29 @@ glass sphere with iridescence, iridescent body), plus base color + ORM +
 iridescence-thickness textures. The other test scenes (Box, Suzanne, Lantern,
 ...) use none of these extensions.
 
-### Open Bugs
-1. **ORM roughness CPU/GPU parity.** CPU `renderer.cc` (ORM roughness
-   override block in the mesh-hit shading path) reads ORM bytes
-   directly (correct — glTF ORM is linear data). GPU `shaders.metal` (ORM
-   roughness override in trace_ray, calls `sample_base_color`) samples
-   through that function, which applies an sRGB→linear conversion,
-   so GPU roughness values are systematically off.
-   **Fix:** add a linear (non-sRGB) sampler for the ORM texture on the GPU side.
-
 ### Phase 1 — Per-pixel PBR foundation
-Goal: plastic/metallic become one PBR material parameterized per pixel, which
-is how glTF actually expresses it. IridescenceLamp's materials have no explicit
-`metallicFactor`, so the spec default (1.0) currently classifies the shade and
-body as hard `MAT_METALLIC` mirrors (`gltf_parser.cc`, metallic/plastic
-class-split branch, `else if (metallic > 0.5f)`) — the ORM B channel
-carrying the real per-pixel metalness is never consulted.
+**All five items done.** Goal: plastic/metallic as one PBR material
+parameterized per pixel — how glTF actually expresses it. (Original
+motivation: IridescenceLamp's materials have no explicit `metallicFactor`, so
+the spec default (1.0) classified the shade and body as hard `MAT_METALLIC`
+mirrors — `gltf_parser.cc`, class-split branch `else if (metallic > 0.5f)` —
+and the ORM B channel carrying the real per-pixel metalness was never
+consulted. The classification label is retained at import; per-pixel shading
+is now driven by the ORM B channel in both backends.)
 
-1. Fix the ORM parity bug above.
-2. Add per-pixel `metallic = ORM.B × metallicFactor` and `ao = ORM.R` —
-   new fields on CPU `MeshObjData` (`include/types.h`) and GPU `MeshMat`
-   (`shaders.metal` + upload in `gpu_renderer.mm`).
-3. Merge `MAT_PLASTIC` / `MAT_METALLIC` in both shading paths:
-    diffuse `basecolor × (1−metallic) × N·L`,
-    specular `F0 = mix(0.04, basecolor, metallic)`.
-    `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes.
+1. DONE (item 1): **ORM roughness CPU/GPU parity fixed** (commit 96266de) —
+   the GPU samples `metallicRoughnessTexture` through a linear (non-sRGB)
+   sampler instead of the sRGB→linear base-color path; A/B-verified in
+   "CPU/GPU AE Baseline" below (267,361 → 132,978 px, halved).
+2. DONE (item 2): per-pixel `metallic = ORM.B × metallicFactor` and
+   `ao = ORM.R` added as fields on CPU `MeshObjData` (`include/types.h`) and
+   GPU `MeshMat` (`shaders.metal` + upload in `gpu_renderer.mm`;
+   commit 183750c).
+3. DONE (item 3): `MAT_PLASTIC` / `MAT_METALLIC` merged in both shading paths:
+   diffuse `basecolor × (1−metallic) × N·L`,
+   specular `F0 = mix(0.04, basecolor, metallic)`.
+   `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes (commit 028e9c4;
+   rebaseline in "Rebaseline after the item-3 merge" below).
 4. DONE (item 4): Multiply AO into the ambient and per-light diffuse terms in
    both backends; specular lobe + F0 mirror deliberately untouched.
 5. DONE (item 5): Rebaseline after item 4 — 127,575 differing pixels

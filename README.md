@@ -33,9 +33,12 @@ make test     # Render all test scenes
 │   ├── renderer/        # Ray tracing core (CPU + Metal GPU)
 │   ├── shading/         # Material properties, floor pattern
 │   ├── vector/          # 3D vector math
-│   └── output/          # PPM/PNG writers
-├── include/             # Shared type definitions
-├── tools/               # Mesh generators (torus, ico sphere, vase)
+│   ├── output/          # PPM/PNG writers
+│   ├── denoiser/        # Image denoiser
+│   └── envmap/          # HDR environment map loading
+├── include/             # Shared type definitions + thin_film.h (CPU/MSL source of record)
+├── tools/               # Mesh generators (torus, ico sphere, vase);
+│   #                    # ppm_diff.py CPU/GPU parity harness; iridescence parity checks
 ├── web_viewer/          # Three.js-based glTF viewer (npm run dev)
 ├── test_scenes/         # glTF test models + scene JSON files
 └── envmaps/             # HDR environment maps
@@ -62,10 +65,11 @@ make test     # Render all test scenes
 | KHR_materials_ior | Done |
 | KHR_materials_volume (thickness) | Parsed, unused |
 | Punctual lights (KHR_lights_punctual) | — |
-| KHR_materials_iridescence | Not implemented (Phase 2 below) |
+| KHR_materials_iridescence (thin film, three.js parity model) | Done (both backends) |
 | glTF baseColorTexture (sRGB→linear, bilinear) | Done |
-| glTF ORM roughness (G channel × factor) | Done (CPU/GPU parity bug — nextsteps.md) |
-| glTF per-pixel metallic (B) / AO (R) | Not done (Phase 1 below) |
+| glTF ORM roughness (G channel × factor) | Done (linear sampling both backends) |
+| Unified per-pixel PBR (unified plastic/metallic, ORM.B → metallic, F0 = mix(0.04, basecolor, metallic)) | Done |
+| glTF AO (ORM.R) on ambient + per-light diffuse | Done (specular/mirror deliberately un-AO'd) |
 | **Configurable FOV** (`fov_y` in scene JSON, default 90°) | Done |
 | **Image texture loading** (PNG/JPEG via stb_image) | Done |
 | **sRGB→linear conversion + bilinear sampling** | Done |
@@ -78,28 +82,30 @@ make test     # Render all test scenes
 | `--mesh-stats` | Print geometry, BVH, material, and intersection diagnostics |
 | `--threads N` | Set CPU thread count |
 
+## CPU/GPU Parity Harness
+
+CPU/GPU correctness is measured, not eyeballed: `tools/ppm_diff.py` plus the
+committed canonical mask `test_scenes/lamp_glass_mask.ppm` (the glass-sphere
+region of the IridescenceLamp scene — force-added since `*.ppm` is gitignored;
+use the committed file, do not regenerate it). Reproduce the AE baseline:
+
+```bash
+./ray2 --cpu test_scenes/scene_lamp_stdout.json > /tmp/lamp_cpu.ppm  # CPU path
+./ray2 test_scenes/scene_lamp_stdout.json > /tmp/lamp_gpu.ppm        # GPU path
+python3 tools/ppm_diff.py /tmp/lamp_cpu.ppm /tmp/lamp_gpu.ppm
+python3 tools/ppm_diff.py /tmp/lamp_cpu.ppm /tmp/lamp_gpu.ppm \
+        test_scenes/lamp_glass_mask.ppm   # adds inside/outside masked split
+```
+
+`scene_lamp_stdout.json` is `scene_lamp.json` without its `"output"` key, so
+both renders write raw PPM to stdout (a `28T`/`GPU` prefix line precedes the
+PPM header; the diff tool scans for `P6\n`). Both backends are
+byte-deterministic, so the counts are exact, not a noise level. Current
+baseline (768×1024): **127,582** differing pixels (16.22%), sum_abs_err
+9,682,442, max channel err 80 — masked: inside 110,453 / outside 17,129,
+inside share 86.57%.
+
 ## Next Steps
 
-Material/texture work is anchored on **IridescenceLamp** (Khronos sample:
-3 materials, base color + ORM + iridescence-thickness textures,
-transmission/ior/volume/iridescence extensions). Full phased plan and bug
-status in [nextsteps.md](nextsteps.md).
-
-### Phase 1 — Per-pixel PBR (foundation)
-- Fix ORM roughness CPU/GPU parity bug (GPU sRGB-converts a linear texture)
-- Per-pixel metallic from ORM B channel, AO from ORM R channel
-- Merge plastic/metallic material classes into one PBR branch:
-  `diffuse × (1−metallic)`, `F0 = mix(0.04, basecolor, metallic)`
-
-### Phase 2 — KHR_materials_iridescence
-- Parse extension (factor, IOR, thickness min/max, thickness texture)
-- Load thickness texture; thin-film interference tint on the specular lobe
-
-### Phase 3 — Volume absorption
-- Use `KHR_materials_volume` thickness in the glass transmission path
-
-### Longer term
-- **True area lights** — softer, more realistic shadows
-- **GPU animation** — currently falls back to CPU
-- **JSON schema validation** for scene files
-- **Web viewer diff panel** — load mesh_stats.json alongside Three.js data for automated comparison
+The phased material/texture plan (anchored on **IridescenceLamp**), current
+AE baseline, and the investigation log live in [nextsteps.md](nextsteps.md).
