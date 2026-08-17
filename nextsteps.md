@@ -29,10 +29,12 @@
 ### glTF Textures
 - **baseColorTexture:** Done — sRGB→linear, bilinear, wrap-repeat, both backends.
 - **metallicRoughnessTexture (ORM):** G channel (roughness) × `roughnessFactor`,
-  both backends. B (metallic) and R (occlusion/AO) are **ignored**.
-  CPU/GPU parity bug on the G channel — see "Open Bugs" below.
+  B (metallic) × `metallicFactor`, both backends. B is consumed by the unified
+  plastic/metallic PBR (diffuse × (1−metallic), F0 = mix(0.04, basecolor,
+  metallic) specular, F0-weighted mirror). R (occlusion/AO) is plumbed per
+  pixel but not yet consumed (Phase 1 item 4).
 - **occlusionTexture:** References the same ORM texture in IridescenceLamp;
-  unused (R channel ignored).
+  unused (R channel pending Phase 1 item 4).
 - **normalTexture / emissiveTexture:** Not implemented (IridescenceLamp uses neither).
 
 ### Diagnostics Infrastructure
@@ -197,11 +199,23 @@ the count is exact, not a noise level.
 12,274,209. Identical at 96266de. At 9fb7c92 (pre-ORM-parity-fix) the AE was
 267,361 (34.00%), sum_abs_err 13,096,122 — the ORM fix (96266de) halved it.
 
+**Rebaseline after the item-3 merge** (unified `MAT_PLASTIC`/`MAT_METALLIC`
+PBR: diffuse × (1−metallic), F0 = mix(0.04, basecolor, metallic) specular,
+and the mirror reflection restored as an F0-weighted term of the unified
+material — commit recording this baseline) — **127,611** differing pixels
+(16.23%), sum_abs_err 12,260,697, max channel err 76. Masked split: inside
+110,416 / 12,205,351; outside 17,195 / 55,346. The 5,367-pixel drop vs
+132,978 is real parity from the unified material (see the glass-region
+section: the outside pixels are all lamp metal, now F0-tinted per pixel);
+the residual is the same documented CPU-recursive-vs-GPU-iterative split,
+not noise to tune toward.
+
 **Origin check for 133,752:** a previously cited figure of 133,752 (17.0%) does not
 appear anywhere in repo history — `git log -S "133,752" -S "133752" --all` returns
 no commits, and no doc ever recorded it (the companion glass-path figure, 108,003,
 is likewise absent). It is not reproducible in any tested state (9fb7c92 / 96266de /
-183750c are all byte-deterministic). Treat **132,978** as the baseline.
+183750c are all byte-deterministic). Treat **132,978** as the pre-item-3
+baseline (superseded — see "Rebaseline after the item-3 merge" above).
 
 ### Glass-Region Share of the CPU/GPU AE — scene_lamp.json (768×1024)
 
@@ -234,20 +248,37 @@ pipeline is reproducible.
 `./ray2 --cpu test_scenes/scene_lamp_no_glass.json` / `./ray2 test_scenes/...`
 and the full scene (`scene_lamp.json` without its `output` key), 768×1024.
 
-**Measured (mask, `ppm_diff.py full_cpu full_gpu mask.ppm`):**
+**Measured (mask, `ppm_diff.py full_cpu full_gpu mask.ppm`):** — at b2c242f
 - inside: 111,785 differing / sum_abs_err 12,214,931 (75.78% of region)
 - outside: 21,193 differing / sum_abs_err 59,278 (3.32% of its 638,928 px)
 - inside share of total differing: **84.06%**
 - mean error 109.3/px inside vs 2.8/px outside — clean separation between the
   glass-path divergence and background float noise.
 
+**Measured after the item-3 merge** (unified plastic/metallic PBR +
+F0-weighted mirror; same mask from b2c242f, same method):
+- inside: 110,416 differing / sum_abs_err 12,205,351 (74.86% of region)
+- outside: 17,195 differing / sum_abs_err 55,346 (2.69% of its 638,928 px)
+- inside share of total differing: **86.53%**
+
+Composition of the outside band (diagnosed at b2c242f with a sky-only
+reference render): **all** 21,193 outside differing pixels sat on the lamp
+shade/body (the `MAT_METALLIC` meshes); zero on sky — sky
+pixels are bit-identical across backends. The item-3 merge re-shades exactly
+those metal pixels (F0-tinted mirror per pixel, no diffuse at metallic=1,
+spec gain 0.4 vs 0.8), so the outside count moves with them (21,193 →
+17,195); that is expected and not a parity improvement to chase. A near-black
+metal reading with an outside count around 7k signals the mirror was dropped,
+not that the backends agree.
+
 **Cross-check (bbox region `51,517,717,507` = 363,519 px):** inside 114,692
 differing / 12,254,088 (86.25% share); the rect overcovers (sky in its
 corners), so the rendered mask is the preferred definition.
 
 **108,003 verdict:** not reproducible — the mask gives 111,785 and the bbox
-114,692; no committed run ever recorded 108,003. Treat 111,785 (rendered mask)
-as the glass-region share. It is a spatial count of differing pixels in the
+114,692; no committed run ever recorded 108,003. After the item-3 merge the mask
+measures 110,416 (below). Treat 111,785 (rendered mask) as the
+pre-item-3 glass-region share. It is a spatial count of differing pixels in the
 glass-influenced region, not a causal traversal-only count — that split is not
 separable from float noise out of two images.
 
@@ -266,8 +297,9 @@ separable from float noise out of two images.
   materials, scenes, transforms).
 - **Extensions:** KHR_materials_transmission, KHR_materials_ior parsed and
   applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence not
-  parsed. Textures: baseColorTexture + ORM roughness (G) wired on both
-  backends; metallic (B) / AO (R) not yet implemented (Phase 1).
+  parsed. Textures: baseColorTexture + ORM wired on both backends — G
+  (roughness) and B (metallic, in the unified plastic/metallic PBR); R
+  (AO) plumbed, pending Phase 1 item 4.
 - **Diagnostics:** `--mesh-stats` flag, per-mesh degenerate triangle analysis, accessor
   metadata, index range checks, JSON output to `mesh_stats.json`.
 - **Tested with:** Box, Suzanne, Lantern, WaterBottle, Avocado, BoomBox,

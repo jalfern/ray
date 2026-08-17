@@ -529,7 +529,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 hit_n;
             float3 sc_col = float3(1.0f);
             float sref = 0, sior = 1.5f, srough = 1.0f;
-            float smetal = 1.0f, sao = 1.0f;
+            float smetal = 0.0f, sao = 1.0f;
             int smat = 0;
 
             if (hs && (!hf0 || ts < tf) && (!hm || ts < tm)) {
@@ -539,6 +539,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 sior = spheres[si].ior;
                 srough = spheres[si].roughness;
                 smat = spheres[si].mat_type;
+                smetal = (smat == MAT_METALLIC) ? 1.0f : 0.0f;
             } else if (hm && (!hf0 || tm < tf)) {
                 hit_type = 2; t_hit = tm;
                 int mesh_idx = tris[mi].mesh_idx;
@@ -637,13 +638,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 }
             }
 
-            (void)smetal;
             (void)sao;
 
             if (mat == MAT_EMISSIVE) {
                 accum += sc_col * thru;
                 break;
             }
+
+            /* Merged plastic+metallic PBR params (per pixel):
+               kd = 1 - metallic, F0 = mix(0.04, basecolor, metallic).
+               F0 is sc when metallic=1 and 0.04 when metallic=0. */
+            float kd = 1.0f - smetal;
+            float3 f0 = sc_col * smetal + float3(0.04f) * kd;
 
             float3 lit = float3(0.0f);
             for (int li = 0; li < nl; li++) {
@@ -659,15 +665,17 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 float spec_exp = 2.0f + 510.0f * (1.0f - srough) * (1.0f - srough);
                 float sp = pow(max(0.0f, dot(n_hit, hv)), spec_exp);
                 float lf = sh ? 0.0f : 1.0f;
-                float ss = (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 0.4f : 0.8f;
+                float ss = (mat == MAT_GLASS) ? 0.8f : 0.4f;
 
                 if (mat == MAT_SUBSURFACE) {
                     float bdiff = max(0.0f, dot(-n_hit, ld));
                     lit += sc_col * diff * lf * 0.7f
                          + sc_col * bdiff * lf * 0.3f
                          + sc_col * sp * ss * lf;
-                } else {
+                } else if (mat == MAT_GLASS) {
                     lit += sc_col * diff * lf + sc_col * sp * ss * lf;
+                } else {
+                    lit += (sc_col * kd) * diff * lf + f0 * sp * ss * lf;
                 }
             }
             for (int ei = 0; ei < ne; ei++) {
@@ -700,7 +708,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sph,
                                                   tris, tc, bvh, nb, skip_mesh);
                 if (vis) {
-                    lit += sc_col * emissive[ei].emitted * (G / pdf);
+                    float3 emd = sc_col * kd;
+                    lit += emd * emissive[ei].emitted * (G / pdf);
                 }
             }
             float3 amb = sc_col * 0.15f;
@@ -717,10 +726,13 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 refl_d = reflect(rd, na);
             float3 refl_o = p + refl_d * EPS;
 
-            if (mat == MAT_METALLIC) {
+            if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
+                /* Unified PBR mirror: keep tracing the reflection ray,
+                   tinting throughput per-channel by F0 (the old
+                   basecolor-tinted metal mirror at metallic=1). */
                 ro = refl_o;
                 rd = refl_d;
-                thru *= sc_col;
+                thru *= f0;
                 continue;
             }
 

@@ -417,7 +417,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V hit_n;
     float sphere_col[3] = {1,1,1};
     float sphere_ref = 0, sphere_ior = 1.5f, sphere_rough = 1.0f;
-    float sphere_metallic = 1.0f, sphere_ao = 1.0f;
+    float sphere_metallic = 0.0f, sphere_ao = 1.0f;
     int sphere_mat = 0;
 
     if (hs && (!hf || ts < tf) && (!hm || ts < tm)) {
@@ -429,6 +429,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sphere_ior = spheres[si].ior;
         sphere_rough = spheres[si].roughness;
         sphere_mat = spheres[si].mat_type;
+        sphere_metallic = (sphere_mat == MAT_METALLIC) ? 1.0f : 0.0f;
     } else if (hm && (!hf || tm < tf)) {
         hit_type = 2; t_hit = tm; hit_n = mn;
         sphere_col[0] = meshes[mi].col.x;
@@ -542,10 +543,15 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
-    (void)sphere_metallic;
     (void)sphere_ao;
 
     if (mat == MAT_EMISSIVE) return sc;
+
+    /* Merged plastic+metallic PBR params (per pixel):
+       kd = 1 - metallic, F0 = mix(0.04, basecolor, metallic).
+       F0 is sc when metallic=1 and 0.04 when metallic=0. */
+    float kd = 1.0f - sphere_metallic;
+    V f0 = add(mul(sc, sphere_metallic), mul((V){0.04f, 0.04f, 0.04f}, kd));
 
     V lit = {0, 0, 0};
     for (int li = 0; li < num_lights; li++) {
@@ -562,7 +568,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         V half = norm(add(light_dir, view));
 
         float spec_exp = 2.0f + 510.0f * (1.0f - sphere_rough) * (1.0f - sphere_rough);
-        float spec_str = (mat == MAT_PLASTIC || mat == MAT_SUBSURFACE) ? 0.4f : 0.8f;
+        float spec_str = (mat == MAT_GLASS) ? 0.8f : 0.4f;
         float spec = powf(fmaxf(0.0f, dot(n, half)), spec_exp);
         float lf = sf ? 0.0f : 1.0f;
 
@@ -571,8 +577,11 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             lit = add(lit, add(mul(sc, diff * lf * 0.7f),
                               add(mul(sc, bdiff * lf * 0.3f),
                                   mul(sc, spec * spec_str * lf))));
-        } else {
+        } else if (mat == MAT_GLASS) {
             lit = add(lit, add(mul(sc, diff * lf), mul(sc, spec * spec_str * lf)));
+        } else {
+            /* Merged plastic+metallic PBR: diffuse * (1-metallic), specular F0. */
+            lit = add(lit, add(mul(mul(sc, kd), diff * lf), mul(f0, spec * spec_str * lf)));
         }
     }
 
@@ -610,14 +619,14 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (vis) {
             V le = emissive[ei].emitted;
             V em_contrib = mul(le, G / pdf);
-            lit = add(lit, (V){sc.x * em_contrib.x, sc.y * em_contrib.y, sc.z * em_contrib.z});
+            V emd = mul(sc, kd);
+            lit = add(lit, (V){emd.x * em_contrib.x, emd.y * em_contrib.y, emd.z * em_contrib.z});
         }
     }
 
     V ambient = mul(sc, 0.15f);
     V base_color = add(ambient, lit);
 
-    if (mat == MAT_PLASTIC) return base_color;
     if (mat == MAT_SUBSURFACE) return base_color;
 
     float cos_i = dot(n, d);
@@ -632,9 +641,10 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                            lights, num_lights, emissive, num_emissive,
                            sample_idx, env, textures, num_textures);
 
-    if (mat == MAT_METALLIC) {
-        V metal = (V){refl_col.x * sc.x, refl_col.y * sc.y, refl_col.z * sc.z};
-        return add(base_color, metal);
+    if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
+        /* Unified PBR mirror: reflection weighted per-channel by F0
+           (the old basecolor-tinted metal mirror at metallic=1). */
+        return add(base_color, (V){refl_col.x * f0.x, refl_col.y * f0.y, refl_col.z * f0.z});
     }
 
     float reflectivity = sphere_ref;
