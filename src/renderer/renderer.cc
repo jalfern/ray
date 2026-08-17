@@ -4,6 +4,7 @@
 #include "../denoiser/denoiser.h"
 #include "../envmap/envmap.h"
 #include "bvh.h"
+#include "thin_film.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,6 +252,30 @@ static V sample_texture(ImageTexture* tex, float u, float v) {
     float g = (1-ry)*((1-rx)*c00g + rx*c10g) + ry*((1-rx)*c01g + rx*c11g);
     float b = (1-ry)*((1-rx)*c00b + rx*c10b) + ry*((1-rx)*c01b + rx*c11b);
     return (V){r, g, b};
+}
+
+/* Iridescence thickness map: linear data in the GREEN channel (matches
+   three.js, which reads `.g`; KHR_materials_iridescence's sample model
+   stores its data there).  Bilinear, wrap-repeat, no transfer function. */
+static float sample_iri_thickness(ImageTexture* tex, float u, float v) {
+    u = u - floorf(u);
+    v = v - floorf(v);
+    float fx = u * tex->width - 0.5f;
+    float fy = v * tex->height - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    float rx = fx - ix;
+    float ry = fy - iy;
+    int x0 = (ix + tex->width * 1024) % tex->width;
+    int y0 = (iy + tex->height * 1024) % tex->height;
+    int x1 = (x0 + 1) % tex->width;
+    int y1 = (y0 + 1) % tex->height;
+    unsigned char* t = tex->data;
+    float g00 = t[(y0 * tex->width + x0) * 4 + 1] / 255.0f;
+    float g10 = t[(y0 * tex->width + x1) * 4 + 1] / 255.0f;
+    float g01 = t[(y1 * tex->width + x0) * 4 + 1] / 255.0f;
+    float g11 = t[(y1 * tex->width + x1) * 4 + 1] / 255.0f;
+    return (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
 }
 
 static V tone_map(V c, float exposure) {
@@ -551,6 +576,41 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     float kd = 1.0f - sphere_metallic;
     V f0 = add(mul(sc, sphere_metallic), mul((V){0.04f, 0.04f, 0.04f}, kd));
 
+    /* KHR_materials_iridescence: thin-film interference tint on the
+       specular/reflection lobes, view-direction angle blend per the
+       reference model.  Entering hits only — the film coats the outer
+       surface (a glass exit ray sees no film).  Diffuse/ambient terms
+       are untouched (specular/reflection tint only). */
+    V film = (V){0, 0, 0};
+    float film_w = 0.0f;
+    V f0mix = f0;
+    if (hit_type == 2 && meshes[mi].iri_factor > 0.0f &&
+        (mat != MAT_GLASS || dot(n, d) < 0.0f)) {
+        float tv = 1.0f; /* three.js: no thickness map -> maximum thickness */
+        if (meshes[mi].iri_tex_index >= 0 && meshes[mi].iri_tex_index < num_textures &&
+            textures) {
+            tv = sample_iri_thickness(&textures[meshes[mi].iri_tex_index],
+                                      m_uv[0], m_uv[1]);
+        }
+        float d_nm = meshes[mi].iri_thin_min +
+                     (meshes[mi].iri_thin_max - meshes[mi].iri_thin_min) * tv;
+        float cv = fabsf(dot(n, norm(sub(o, p))));
+        if (cv > 1.0f) cv = 1.0f;
+        V bf0 = f0;
+        if (mat == MAT_GLASS) {
+            /* Dielectric substrate F0 from the glass IOR (three.js feeds the
+               material's specularColor; r0 ~ 0.054 for IOR 1.6). */
+            float gr = (1.0f - sphere_ior) / (1.0f + sphere_ior);
+            gr *= gr;
+            bf0 = mul(sc, gr);
+        }
+        film_w = meshes[mi].iri_factor;
+        if (film_w > 1.0f) film_w = 1.0f;
+        film = tf_eval_iridescence(1.0f, meshes[mi].iri_ior, cv, d_nm, bf0);
+        V film_f0 = tf_schlick_to_f0(film, 1.0f, cv);
+        f0mix = add(mul(f0, 1.0f - film_w), mul(film_f0, film_w));
+    }
+
     V lit = {0, 0, 0};
     for (int li = 0; li < num_lights; li++) {
         V light_pos = lights[li].pos;
@@ -578,10 +638,13 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                               add(mul(sc, bdiff * lf * 0.3f * sphere_ao),
                                   mul(sc, spec * spec_str * lf))));
         } else if (mat == MAT_GLASS) {
-            lit = add(lit, add(mul(sc, diff * lf * sphere_ao), mul(sc, spec * spec_str * lf)));
+            /* Specular weight takes the film response per channel when present. */
+            V glw = mul(sc, spec_str);
+            if (film_w > 0.0f) glw = add(mul(glw, 1.0f - film_w), mul(film, film_w));
+            lit = add(lit, add(mul(sc, diff * lf * sphere_ao), mul(glw, spec * lf)));
         } else {
             /* Merged plastic+metallic PBR: diffuse * (1-metallic) * AO, specular F0. */
-            lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(f0, spec * spec_str * lf)));
+            lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(f0mix, spec * spec_str * lf)));
         }
     }
 
@@ -644,7 +707,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
         /* Unified PBR mirror: reflection weighted per-channel by F0
            (the old basecolor-tinted metal mirror at metallic=1). */
-        return add(base_color, (V){refl_col.x * f0.x, refl_col.y * f0.y, refl_col.z * f0.z});
+        return add(base_color, (V){refl_col.x * f0mix.x, refl_col.y * f0mix.y, refl_col.z * f0mix.z});
     }
 
     float reflectivity = sphere_ref;
@@ -671,7 +734,18 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     r0 = r0 * r0;
     float fresnel = r0 + (1.0f - r0) * powf(1.0f - cos_i, 5.0f);
 
-    V glass = add(mul(refl_col, fresnel * reflectivity), mul(refr_col, 1.0f - fresnel));
+    /* Iridescence: the film response replaces the glass surface weight per
+       channel; the transmitted term is the clamped complement so the blend
+       stays energy-consistent.  Without a film these reduce to the scalar
+       weights above exactly. */
+    V wr = (V){fresnel * reflectivity, fresnel * reflectivity, fresnel * reflectivity};
+    V wt = (V){1.0f - fresnel, 1.0f - fresnel, 1.0f - fresnel};
+    if (film_w > 0.0f) {
+        wr = add(mul(wr, 1.0f - film_w), mul(film, film_w));
+        wt = (V){fmaxf(0.0f, 1.0f - wr.x), fmaxf(0.0f, 1.0f - wr.y), fmaxf(0.0f, 1.0f - wr.z)};
+    }
+    V glass = add((V){refl_col.x * wr.x, refl_col.y * wr.y, refl_col.z * wr.z},
+                  (V){refr_col.x * wt.x, refr_col.y * wt.y, refr_col.z * wt.z});
     return add(base_color, glass);
 }
 
@@ -781,6 +855,11 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].metallic = scene->meshes[i].metallic;
             meshes[i].tex_index = scene->meshes[i].tex_index;
             meshes[i].orm_tex_index = scene->meshes[i].orm_tex_index;
+            meshes[i].iri_tex_index = scene->meshes[i].iri_tex_index;
+            meshes[i].iri_factor = scene->meshes[i].iri_factor;
+            meshes[i].iri_ior = scene->meshes[i].iri_ior;
+            meshes[i].iri_thin_min = scene->meshes[i].iri_thin_min;
+            meshes[i].iri_thin_max = scene->meshes[i].iri_thin_max;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;

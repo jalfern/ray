@@ -48,6 +48,11 @@ typedef struct {
     int mat_type;
     int tex_index;
     int orm_tex_index;
+    int iri_tex_index;
+    float iri_factor;
+    float iri_ior;
+    float iri_thin_min;
+    float iri_thin_max;
     V pos;
     float scale;
     TextureData tex;

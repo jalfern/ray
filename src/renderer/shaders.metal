@@ -337,6 +337,11 @@ struct MeshMat {
     packed_float3 tex_color2;
     int tex_index;
     int orm_tex_index;
+    int iri_tex_index;
+    float iri_factor;
+    float iri_ior;
+    float iri_thin_min;
+    float iri_thin_max;
 };
 
 static float hash3(float x, float y, float z) {
@@ -457,6 +462,95 @@ static float3 sample_linear(texture2d<float> tex, float2 uv) {
     return tex.sample(s, float2(u, v)).rgb;
 }
 
+/* ── KHR_materials_iridescence: thin-film interference ─────────
+ *  MSL port, line-for-line with include/thin_film.h (source of record
+ *  for the constants: three.js iridescence_fragment.glsl.js / common.
+ *  glsl.js / lights_physical_pars_fragment.glsl.js).  d_nm is in nm.
+ *  cv = clamped |N·V| (view direction, per the reference).
+ */
+static float tf_r_f0(float n_a, float n_b) {
+    float t = (n_a - n_b) / (n_a + n_b);
+    return t * t;
+}
+
+static float tf_f_schlick(float f0, float f90, float cos_v) {
+    float fresnel = exp2((-5.55473f * cos_v - 6.98316f) * cos_v);
+    return f0 * (1.0f - fresnel) + f90 * fresnel;
+}
+
+static float3 tf_eval_sensitivity(float opd, float3 phi) {
+    float phase = 2.0f * M_PI_F * opd * 1.0e-9f;
+    float p2 = phase * phase;
+    float3 xr = float3(5.4856e-13f, 4.4201e-13f, 5.2481e-13f)
+              * float3(sqrt(2.0f * M_PI_F * 4.3278e+09f), sqrt(2.0f * M_PI_F * 9.3046e+09f), sqrt(2.0f * M_PI_F * 6.6121e+09f))
+              * float3(cos(1.6810e+06f * phase + phi.x), cos(1.7953e+06f * phase + phi.y), cos(2.2084e+06f * phase + phi.z))
+              * float3(exp(-p2 * 4.3278e+09f), exp(-p2 * 9.3046e+09f), exp(-p2 * 6.6121e+09f));
+    xr.x += 9.7470e-14f * sqrt(2.0f * M_PI_F * 4.5282e+09f) * cos(2.2399e+06f * phase + phi.x) * exp(-p2 * 4.5282e+09f);
+    xr /= 1.0685e-7f;
+    /* XYZ -> linear sRGB (Rec.709) */
+    return float3(3.2404542f * xr.x - 1.5371385f * xr.y - 0.4985314f * xr.z,
+                  -0.9692660f * xr.x + 1.8760108f * xr.y + 0.0415560f * xr.z,
+                  0.0556434f * xr.x - 0.2040259f * xr.y + 1.0572252f * xr.z);
+}
+
+static float3 tf_eval_iridescence(float outside_ior, float eta2, float cv, float d_nm, float3 base_f0) {
+    /* Force iridescenceIOR -> outsideIOR when thinFilmThickness -> 0.0 */
+    float s = d_nm / 0.03f;
+    s = clamp(s, 0.0f, 1.0f);
+    s = s * s * (3.0f - 2.0f * s);
+    float n_f = outside_ior + (eta2 - outside_ior) * s;
+
+    /* cosTheta2 via Snell's law, with TIR handling */
+    float si = outside_ior / n_f;
+    float cos2q = 1.0f - si * si * (1.0f - cv * cv);
+    if (cos2q < 0.0f) {
+        return float3(1.0f);
+    }
+    float cos2 = sqrt(cos2q);
+
+    /* First interface (air / film) */
+    float R12 = tf_f_schlick(tf_r_f0(n_f, outside_ior), 1.0f, cv);
+    float T121 = 1.0f - R12;
+    float phi12 = 0.0f;
+    if (n_f < outside_ior) phi12 = M_PI_F;
+    float phi21 = M_PI_F - phi12;
+
+    /* Second interface (film / base material) */
+    float3 bf0 = clamp(base_f0, 0.0f, 0.9999f);
+    float3 sr = sqrt(bf0);
+    float3 bior = (float3(1.0f) + sr) / (float3(1.0f) - sr);
+    float3 R1 = float3(tf_r_f0(bior.x, n_f), tf_r_f0(bior.y, n_f), tf_r_f0(bior.z, n_f));
+    float3 R23 = float3(tf_f_schlick(R1.x, 1.0f, cos2), tf_f_schlick(R1.y, 1.0f, cos2), tf_f_schlick(R1.z, 1.0f, cos2));
+    float3 phi23 = float3((bior.x < n_f) ? M_PI_F : 0.0f,
+                          (bior.y < n_f) ? M_PI_F : 0.0f,
+                          (bior.z < n_f) ? M_PI_F : 0.0f);
+
+    /* Phase shift and compound terms */
+    float opd = 2.0f * n_f * d_nm * cos2;
+    float3 R123 = clamp(R12 * R23, 1e-5f, 0.9999f);
+    float3 r123 = sqrt(R123);
+    float3 Rs = T121 * T121 * R23 / (float3(1.0f) - R123);
+
+    /* m = 0 (DC term amplitude), then m = 1, 2 (pairs of diracs) */
+    float3 I = R12 + Rs;
+    float3 Cm = Rs - T121;
+    for (int m = 1; m <= 2; m++) {
+        Cm *= r123;
+        float3 Sm = 2.0f * tf_eval_sensitivity((float)m * opd, (float)m * (float3(phi21) + phi23));
+        I += Cm * Sm;
+    }
+
+    /* Out-of-gamut colors can be produced; clamp negative values to 0. */
+    return max(I, float3(0.0f));
+}
+
+static float3 tf_schlick_to_f0(float3 f, float f90, float cos_v) {
+    float x = clamp(1.0f - cos_v, 0.0f, 1.0f);
+    float x2 = x * x;
+    float x5 = clamp(x * x2 * x2, 0.0f, 0.9999f);
+    return (f - float3(f90) * x5) / (1.0f - x5);
+}
+
 static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int sc,
                         device const TriGpu* tris, int tc, device const BvhNode* bvh, int nb,
                         device const MeshMat* mats, int nm,
@@ -466,7 +560,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         int sample_idx, int num_textures,
                         texture2d<float> env_tex, int has_env,
                         texture2d<float> base_color_tex,
-                        texture2d<float> orm_tex) {
+                        texture2d<float> orm_tex,
+                        texture2d<float> iri_tex) {
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
@@ -643,13 +738,46 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 break;
             }
 
-            /* Merged plastic+metallic PBR params (per pixel):
-               kd = 1 - metallic, F0 = mix(0.04, basecolor, metallic).
-               F0 is sc when metallic=1 and 0.04 when metallic=0. */
-            float kd = 1.0f - smetal;
-            float3 f0 = sc_col * smetal + float3(0.04f) * kd;
+             /* Merged plastic+metallic PBR params (per pixel):
+                kd = 1 - metallic, F0 = mix(0.04, basecolor, metallic).
+                F0 is sc when metallic=1 and 0.04 when metallic=0. */
+             float kd = 1.0f - smetal;
+             float3 f0 = sc_col * smetal + float3(0.04f) * kd;
 
-            float3 lit = float3(0.0f);
+             /* KHR_materials_iridescence: thin-film interference tint on the
+                specular/reflection lobes (view-direction angle blend per the
+                reference model).  Entering hits only — the film coats the outer
+                surface.  Diffuse/ambient terms untouched. */
+             float3 film = float3(0.0f);
+             float film_w = 0.0f;
+             float3 f0u = f0;
+             if (hit_type == 2 && tris[mi].mesh_idx >= 0 && tris[mi].mesh_idx < nm &&
+                 mats[tris[mi].mesh_idx].iri_factor > 0.0f &&
+                 (mat != MAT_GLASS || dot(n_hit, rd) < 0.0f)) {
+                 int iri_mid = tris[mi].mesh_idx;
+                 float tv = 1.0f; /* three.js: no thickness map -> maximum thickness */
+                 if (mats[iri_mid].iri_tex_index >= 0 && mats[iri_mid].iri_tex_index < num_textures) {
+                     tv = sample_linear(iri_tex, mesh_uv).g;
+                 }
+                 float d_nm = mats[iri_mid].iri_thin_min +
+                              (mats[iri_mid].iri_thin_max - mats[iri_mid].iri_thin_min) * tv;
+                 float cv = min(abs(dot(n_hit, normalize(ro - p))), 1.0f);
+                 float3 bf0 = f0;
+                 if (mat == MAT_GLASS) {
+                     /* Dielectric substrate F0 from the glass IOR (three.js feeds
+                        the material's specularColor; r0 ~ 0.054 for IOR 1.6). */
+                     float gr = (1.0f - sior) / (1.0f + sior);
+                     gr *= gr;
+                     bf0 = sc_col * gr;
+                 }
+                 film_w = min(mats[iri_mid].iri_factor, 1.0f);
+                 float3 filmv = tf_eval_iridescence(1.0f, mats[iri_mid].iri_ior, cv, d_nm, bf0);
+                 float3 filmf0 = tf_schlick_to_f0(filmv, 1.0f, cv);
+                 f0u = f0 * (1.0f - film_w) + filmf0 * film_w;
+                 film = filmv;
+             }
+
+             float3 lit = float3(0.0f);
             for (int li = 0; li < nl; li++) {
                 float3 ld = normalize(lights[li].pos - p);
                 int sidx = (sample_idx << 2) | li;
@@ -673,9 +801,12 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                          + sc_col * bdiff * lf * 0.3f * sao
                          + sc_col * sp * ss * lf;
                 } else if (mat == MAT_GLASS) {
-                    lit += sc_col * diff * lf * sao + sc_col * sp * ss * lf;
+                    /* Specular weight takes the film response per channel when present. */
+                    float3 glw = sc_col * ss;
+                    if (film_w > 0.0f) glw = glw * (1.0f - film_w) + film * film_w;
+                    lit += sc_col * diff * lf * sao + glw * sp * lf;
                 } else {
-                    lit += (sc_col * kd) * diff * lf * sao + f0 * sp * ss * lf;
+                    lit += (sc_col * kd) * diff * lf * sao + f0u * sp * ss * lf;
                 }
             }
             for (int ei = 0; ei < ne; ei++) {
@@ -732,7 +863,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                    basecolor-tinted metal mirror at metallic=1). */
                 ro = refl_o;
                 rd = refl_d;
-                thru *= f0;
+                thru *= f0u;
                 continue;
             }
 
@@ -745,6 +876,17 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             r0 = r0 * r0;
             float fresnel = r0 + (1.0f - r0) * pow(1.0f - cos_i, 5.0f);
 
+            /* Iridescence: the film response replaces the glass surface weight
+               per channel; the transmitted term is the clamped complement so
+               the blend stays energy-consistent.  Without a film these reduce
+               to the scalar weights exactly. */
+            float3 wr = float3(fresnel) * sref;
+            float3 wt = float3(1.0f - fresnel);
+            if (film_w > 0.0f) {
+                wr = wr * (1.0f - film_w) + film * film_w;
+                wt = max(float3(0.0f), float3(1.0f) - wr);
+            }
+
             if (k > 0) {
                 float cos_t = sqrt(k);
                 float3 refr_d = rd * eta + na * (eta * cos_i - cos_t);
@@ -754,18 +896,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 if (stk < MAX_DEPTH + 2) {
                     stk_o[stk] = (packed_float3)refr_o;
                     stk_d[stk] = (packed_float3)refr_d;
-                    stk_th[stk] = (packed_float3)(cur_thru * (1.0f - fresnel) * sc_col);
+                    stk_th[stk] = (packed_float3)(cur_thru * wt * sc_col);
                     stk_dp[stk] = depth + 1;
                     stk++;
                 }
 
                 ro = refl_o;
                 rd = refl_d;
-                thru = cur_thru * fresnel * sref;
+                thru = cur_thru * wr;
             } else {
                 ro = refl_o;
                 rd = refl_d;
-                thru *= fresnel * sref;
+                thru *= wr;
             }
         }
     }
@@ -786,6 +928,7 @@ kernel void rk(
     texture2d<float> env_tex [[texture(0)]],
     texture2d<float> base_color_tex [[texture(1)]],
     texture2d<float> orm_tex [[texture(2)]],
+    texture2d<float> iri_tex [[texture(3)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -824,10 +967,11 @@ kernel void rk(
                              lights, scene.num_lights,
                              emissive, scene.num_emissive,
                              emissive_cdf, scene.num_emissive_cdf,
-                             sidx, scene.num_textures,
-                             env_tex, scene.has_env,
-                             base_color_tex,
-                             orm_tex);
+                              sidx, scene.num_textures,
+                              env_tex, scene.has_env,
+                              base_color_tex,
+                              orm_tex,
+                              iri_tex);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

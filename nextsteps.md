@@ -21,10 +21,17 @@
   with `transmission=1.0`, `ior=1.6`.
 - **KHR_materials_ior:** Parsed and applied. IOR per-material (1.6 for the glass sphere).
 - **KHR_materials_volume:** Parsed (`thicknessFactor`) but not used by the shader.
-- **KHR_materials_iridescence:** **Not parsed** — the extension object is silently
-  skipped in `gltf_parser.cc`. No iridescence fields exist on `GltfMaterial`, and
-  the thickness texture (IridescenceLamp image idx 2) is never loaded into any
-  mesh. (Earlier docs incorrectly stated this was "parsed".)
+- **KHR_materials_iridescence:** **Fully supported** (Phase 2 complete:
+  parse → load/plumbing → thin-film shader on both backends).
+  `GltfMaterial` carries `iri_factor`, `iri_ior`, `iri_thin_min/max` (nm)
+  and the `iridescenceThicknessTexture` index; all five flow into every mesh
+  (`MeshObj` → CPU `MeshObjData` / GPU 80-byte `MeshMat` + linear
+  `texture(3)` upload). Both backends evaluate the verbatim three.js
+  thin-film model (`include/thin_film.h`, shared with the MSL mirror in
+  `shaders.metal`) and blend it into the per-surface F0. Thickness reads
+  the texture's **G channel** (parity with three.js's `.g` read — the
+  texture's data lives in G; the KHR spec says red). `--mesh-stats`
+  reports the values via `[gltf:mat]`/`[mat]` lines.
 
 ### glTF Textures
 - **baseColorTexture:** Done — sRGB→linear, bilinear, wrap-repeat, both backends.
@@ -98,21 +105,82 @@ carrying the real per-pixel metalness is never consulted.
    (Investigation Log, "CPU/GPU AE Baseline").
 
 ### Phase 2 — KHR_materials_iridescence
-The visual payoff of the model; the extension is not even parsed today.
+The visual payoff of the model. **All three items done** (parse,
+plumbing, shader on both backends).
 
-1. **Parse:** extend the `GltfMaterial` struct (`gltf_parser.cc`) with
-   `iridescenceFactor`, `iridescenceIor`, `iridescenceThicknessMin/Max`,
-   `iridescenceThicknessTex`; read the extension in `parse_materials`.
-   IridescenceLamp values: sphere ior 2.0 / 385–405 nm, body ior 1.8 / 485–515 nm,
-   both with thickness texture idx 2.
-2. **Load:** thickness texture (image idx 2, **linear data**) into the texture
-   array; new `iri_tex_index` per mesh, mirroring the `orm_tex_index` plumbing
-   (`MeshObj` → `MeshObjData` → `MeshMat`).
-3. **Shader (both backends):** thin-film interference tint on the
-   specular/reflection lobe. 3-wavelength analytic thin-film model (~2
-   internal bounces), thickness = `min + (max−min) × texel`, `cos θ₂` via
-   Snell's law at the extension IOR; add the tint weighted by
-   `iridescenceFactor` (angle blend per the KHR reference shader).
+1. DONE (item 1): **Parse.** `GltfMaterial` (`gltf_parser.cc`) gained
+   `iri_factor`, `iri_ior`, `iri_thin_min/max` (nm) and `iri_tex`
+   (the `iridescenceThicknessTexture` index); a `KHR_materials_iridescence`
+   branch reads them in `parse_materials`. Spec defaults applied
+   (factor 0, ior 1.3, 100–400 nm, no texture). Verified via a `--mesh-stats`
+   `[gltf:mat]` line on all three IridescenceLamp glTF variants — exact values
+   match the file: material 1 (glass sphere) iri 1.0 / ior 2.0 / 385–405 nm /
+    tex idx 2; material 2 (body) iri 1.0 / ior 1.8 / 485–515 nm / tex idx 2;
+   material 0 steady on spec defaults. Parse-only change: CPU/GPU renders are
+   byte-identical pre/post and the CPU/GPU AE baseline is unchanged
+   (127,575 px / 110,398 inside / 17,177 outside).
+2. DONE (item 2): **Load/plumbing.** Note: the thickness texture (image idx 2)
+   was *already* decoded into the texture array — `parse_images` decodes every
+   image in the file — so no loader change; only plumbing. All five values now
+   flow `GltfMaterial` → `MeshObj` → (`MeshObjData` CPU @renderer.cc,
+   `MeshMatGpu`→`MeshMat` GPU). GPU: `MeshMat` extended to 80 bytes
+   (`static_assert` updated), thickness texture uploaded as `MTLPixelFormat-
+   RGBA8Unorm` (linear — `sample_linear`, no sRGB) at `texture(3)`, bound
+   single-slate per the existing base-color/ORM upload pattern (the per-mesh
+   `iri_tex_index` is a validity flag, not a selector — all meshes in this
+   model share the texture). Verified: per-mesh `[mat]` lines exact on all
+   three glTF variants (incl. `iri_tex=2` mapping); OBJ `parse_mesh` path
+   initializes all five fields (explicit, since that array is `realloc`'d, not
+   zeroed); CPU+GPU renders byte-identical pre/post (GPU identity proves the
+   80-byte Metal layout match); AE unchanged at 127,575 / 110,398 / 17,177.
+3. DONE (item 3): **Shader (both backends).** The plan above was
+   deliberately superseded: instead of a custom 3-wavelength fit we ported
+   **verbatim the exact model the web viewer uses** — the fused
+   three.js/Belcour analytic thin-film (DC term + 2 interference orders
+   vs CIE-XYZ spectral sensitivities in Fourier space). Sources (vendored):
+   `evalIridescence` from
+   `web_viewer/node_modules/three/src/renderers/shaders/ShaderChunk/
+   iridescence_fragment.glsl.js`, `F_Schlick` (Epic exp2 variant) from
+   `common.glsl.js`, `Schlick_to_F0` from
+   `lights_physical_pars_fragment.glsl.js`. Single C implementation in
+   `include/thin_film.h` (static inline); `shaders.metal` mirrors it in
+   MSL with identical constants. Blend:
+   `F0_eff = mix(baseF0, Schlick_to_F0(film, 1.0, cosV), iridescenceFactor)`
+   where cosV = clamp(|N·V|, 0, 1) is the *view* angle, outsideIOR = 1.0,
+   and the substrate IOR is derived from the surface F0. Glass is
+   special-cased: film applied on entering hits only, per-channel
+   reflection/transmission weights (energy-complementary
+   `max(0.0, 1.0 − wr)`), glass baseF0 = r0·sc with
+   r0 = ((ior−1)/(ior+1))². Thickness = green channel of the
+   `iridescenceThicknessTexture` (`d = min + (max − min) × G`), exactly the
+   three.js read (`lights_physical_fragment.glsl.js:97`):
+    `material.iridescenceThickness = (iridescenceThicknessMaximum -
+    iridescenceThicknessMinimum) * texture2D( iridescenceThicknessMap,
+    vIridescenceThicknessMapUv ).g + iridescenceThicknessMinimum;` The
+    KHR spec says the channel is red, but this texture’s data lives in G
+    (R=B=0, G 0–247) — deliberate
+    deviation from the spec letter for viewer parity, documented in the file. Film is clamped ≥ 0;
+   `Schlick_to_F0` output may go slightly negative (36 of 216 grid rows);
+   the weights clamp it — same as GLSL falling through with no clamp.
+   **Parity:** `tools/iri_check.c` (float32, 6 cosV × 6 d × 2 ior × 3
+   baseF0 grid) vs `tools/iri_ref_check.mjs` (float64 port of the exact
+   chunks, with a constant self-check that emits the glsl function text
+   and diffs the numeric literals) — max abs diff **1.5e-6** (gate 1e-3),
+   PASS. **Control gate:** Box CPU render byte-identical pre/post
+   (`iri_factor > 0` gate ⇒ zero pixels change for scenes without the
+   extension). **Visual:** step-2-vs-step-3 CPU pixel diff localizes
+   changes to exactly the iridescent surfaces — glass sphere (green band
+   at grazing, magenta near normal) + iridescent base ring; plain
+   metal shade / sky / floor have *zero* changed pixels. Model
+   numerics agree with the observed hues (verify: parity grid, glass-like
+   baseF0=0.04 → film (0.23, 0.36, 0.19) green at cosV=0.30 and
+   (0.27, 0.09, 0.16) magenta at cosV≥0.75; white-metal baseF0 ≈ (1,1,1)
+   stays neutral). GPU render compiles clean and shows the same tint.
+   **Rebaseline (new current, see Investigation Log):** 127,582 (16.22%)
+   differing px / sum_abs_err 9,682,442 / max 80; inside 110,453
+   (74.88%) / outside 17,129 (2.68%); inside share 86.57% — count
+   stable vs the item-4 baseline (Δ+7 px): same jittering pixels,
+   no new divergence class introduced by the shader.
 
 ### Phase 3 — KHR_materials_volume absorption
 `thicknessFactor` (0.005 on the lamp sphere) → Beer–Lambert absorption in the
@@ -191,9 +259,12 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED — current: **127,575** differing px /
-sum_abs_err 10,676,607 / max channel err 80 (masked: inside 110,398 /
-10,619,930; outside 17,177 / 56,677) — post-item-4 AO, commit 91bae3b.
+**Status:** BASELINE ESTABLISHED — current: **127,582** differing px /
+sum_abs_err 9,682,442 / max channel err 80 (masked: inside 110,453 /
+9,626,805; outside 17,129 / 55,637) — post-Phase-2-item-3 iridescence
+(shaded renders with the thin-film model active). Superseded baseline:
+127,575 / 10,676,607 / max 80 (inside 110,398 / outside 17,177) —
+post-item-4 AO, commit 91bae3b.
 **Method:** `make`; render CPU (`./ray2 --cpu <scene>`) and GPU (`./ray2 <scene>`)
 with a copy of `test_scenes/scene_lamp.json` that omits the `"output"` key, so each
 writes its PPM to stdout (a `28T`/`GPU` prefix line precedes the PPM header — the
@@ -235,6 +306,23 @@ holds at the established tolerance and nothing was patched. The AE
 scales with local brightness, and AO darkens the occluded glass region, so
 the same traversals now differ by smaller 8-bit deltas. Lower is not better
 here; the counts are the parity signal.
+
+**Rebaseline after Phase 2 item 3 (iridescence shader) — CURRENT
+BASELINE** — thin-film model active on the sphere (mat 1) and base ring
+(mat 2); same canonical mask, same method. — **127,582** differing
+pixels (16.22%), sum_abs_err 9,682,442, max channel err 80. Masked
+split: inside 110,453 / 9,626,805 (74.88% of region); outside 17,129 /
+55,637 (2.68% of its 638,928 px); inside share 86.57%. Tripwire check:
+the differing-pixel *count* moved by only +7 (+0.005%) from 127,575 —
+the thin-film terms are implemented near-identically on both backends
+(the C/MSL port was parity-verified at 1.5e-6 against the exact
+three.js chunks), so no new class of diverging pixels appeared; the same
+jittering pixels remain. The AE *magnitude* fell ~9%
+(10,676,607 → 9,682,442): replacing the raw F0-derived lobe/mirror
+weights with film-weighted ones changes the residual scale of the
+same glass-path traversal divergence (magnitude moves like the item-4
+AO case; the count is the parity signal). This is the current reference
+for future CPU/GPU parity work on this scene.
 
 **Item-4 decision — AO does NOT attenuate specular or the mirror.**
 Baked AO (the ORM.R channel) is a hemispherical-occlusion estimate: it
@@ -353,10 +441,19 @@ F0-weighted mirror untouched; same mask, same method) — CURRENT:**
   is scaled down by the common AO factor in occluded regions — same pixels,
   smaller errors, not a parity fix.
 
-**Current glass-region share:** treat **110,398** (rendered mask, post-item-4
-state) as the current glass-region share of the AE, superseding 110,416
-(post-item-3) and 111,785 (pre-item-3). As before it is a spatial count of
-differing pixels in the glass-influenced region, not a causal
+**Measured after Phase 2 item 3 (iridescence shader; same mask, same
+method) — CURRENT:**
+- inside: 110,453 differing / sum_abs_err 9,626,805 (74.88% of region)
+- outside: 17,129 differing / sum_abs_err 55,637 (2.68% of its 638,928 px)
+- inside share of total differing: **86.57%**
+- count stable vs item-4 (127,575 → 127,582); magnitude fell ~9% as the
+  film-weighted lobe/mirror terms rescale the same traversal divergence.
+
+**Current glass-region share:** treat **110,453** (rendered mask,
+post-Phase-2-item-3 state) as the current glass-region share of the AE,
+superseding 110,398 (post-item-4), 110,416 (post item-3 merge) and
+111,785 (pre-item-3). As before it is a spatial count of differing
+pixels in the glass-influenced region, not a causal
 traversal-only count.
 
 Composition of the outside band (diagnosed at b2c242f with a sky-only
@@ -394,10 +491,14 @@ separable from float noise out of two images.
 - **Core spec:** Full glTF 2.0 importer (buffers, views, accessors, meshes, nodes, cameras,
   materials, scenes, transforms).
 - **Extensions:** KHR_materials_transmission, KHR_materials_ior parsed and
-  applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence not
-   parsed. Textures: baseColorTexture + ORM wired on both backends — G
-   (roughness), B (metallic, in the unified plastic/metallic PBR), R
-   (AO on ambient + per-light diffuse; specular/F0-mirror un-AO'd, item 4).
+  applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence
+  fully supported (parse + plumbing + thin-film shader on both backends;
+  model is a verbatim port of the vendored three.js chunks —
+  `include/thin_film.h`; see Phase 2 item 3). Textures: baseColorTexture +
+  ORM wired on both backends — G
+  (roughness), B (metallic, in the unified plastic/metallic PBR), R
+  (AO on ambient + per-light diffuse; specular/F0-mirror un-AO'd, item 4),
+  plus the iridescence-thickness texture (G channel, linear, `texture(3)`).
 - **Diagnostics:** `--mesh-stats` flag, per-mesh degenerate triangle analysis, accessor
   metadata, index range checks, JSON output to `mesh_stats.json`.
 - **Tested with:** Box, Suzanne, Lantern, WaterBottle, Avocado, BoomBox,

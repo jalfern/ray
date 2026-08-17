@@ -42,6 +42,11 @@ typedef struct {
     Vec3 tex_color2;
     int tex_index;
     int orm_tex_index;
+    int iri_tex_index;
+    float iri_factor;
+    float iri_ior;
+    float iri_thin_min;
+    float iri_thin_max;
 } MeshObj;
 
 typedef struct {
