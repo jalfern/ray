@@ -638,8 +638,6 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 }
             }
 
-            (void)sao;
-
             if (mat == MAT_EMISSIVE) {
                 accum += sc_col * thru;
                 break;
@@ -667,15 +665,17 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 float lf = sh ? 0.0f : 1.0f;
                 float ss = (mat == MAT_GLASS) ? 0.8f : 0.4f;
 
+                /* AO (ORM.R) attenuates the ambient and diffuse terms only;
+                   the specular lobe and the F0-weighted mirror are untouched. */
                 if (mat == MAT_SUBSURFACE) {
                     float bdiff = max(0.0f, dot(-n_hit, ld));
-                    lit += sc_col * diff * lf * 0.7f
-                         + sc_col * bdiff * lf * 0.3f
+                    lit += sc_col * diff * lf * 0.7f * sao
+                         + sc_col * bdiff * lf * 0.3f * sao
                          + sc_col * sp * ss * lf;
                 } else if (mat == MAT_GLASS) {
-                    lit += sc_col * diff * lf + sc_col * sp * ss * lf;
+                    lit += sc_col * diff * lf * sao + sc_col * sp * ss * lf;
                 } else {
-                    lit += (sc_col * kd) * diff * lf + f0 * sp * ss * lf;
+                    lit += (sc_col * kd) * diff * lf * sao + f0 * sp * ss * lf;
                 }
             }
             for (int ei = 0; ei < ne; ei++) {
@@ -708,11 +708,11 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sph,
                                                   tris, tc, bvh, nb, skip_mesh);
                 if (vis) {
-                    float3 emd = sc_col * kd;
+                    float3 emd = sc_col * (kd * sao);
                     lit += emd * emissive[ei].emitted * (G / pdf);
                 }
             }
-            float3 amb = sc_col * 0.15f;
+            float3 amb = sc_col * (0.15f * sao);
             float3 base = amb + lit;
             accum += base * thru;
 

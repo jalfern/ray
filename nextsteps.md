@@ -31,10 +31,14 @@
 - **metallicRoughnessTexture (ORM):** G channel (roughness) × `roughnessFactor`,
   B (metallic) × `metallicFactor`, both backends. B is consumed by the unified
   plastic/metallic PBR (diffuse × (1−metallic), F0 = mix(0.04, basecolor,
-  metallic) specular, F0-weighted mirror). R (occlusion/AO) is plumbed per
-  pixel but not yet consumed (Phase 1 item 4).
+  metallic) specular, F0-weighted mirror). R (occlusion/AO) is consumed as a
+  per-pixel multiplier on the ambient term and the per-light diffuse terms
+  (plastic/metallic, glass, subsurface, and the emissive-surface diffuse pass);
+  the specular lobe and the F0-weighted mirror are **not** AO-attenuated
+  (Phase 1 item 4 — rationale in the Investigation Log).
 - **occlusionTexture:** References the same ORM texture in IridescenceLamp;
-  unused (R channel pending Phase 1 item 4).
+  its R channel is the AO consumed above (the `index` key is the same ORM
+  image the parser already loads via `pbrMetallicRoughnessTexture`).
 - **normalTexture / emissiveTexture:** Not implemented (IridescenceLamp uses neither).
 
 ### Diagnostics Infrastructure
@@ -85,12 +89,13 @@ carrying the real per-pixel metalness is never consulted.
    new fields on CPU `MeshObjData` (`include/types.h`) and GPU `MeshMat`
    (`shaders.metal` + upload in `gpu_renderer.mm`).
 3. Merge `MAT_PLASTIC` / `MAT_METALLIC` in both shading paths:
-   diffuse `basecolor × (1−metallic) × N·L`,
-   specular `F0 = mix(0.04, basecolor, metallic)`.
-   `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes.
-4. Multiply AO into the ambient and per-light diffuse terms.
-5. Verify: CPU/GPU pixel diff of `scene_lamp.json` via `tools/ppm_diff.py`
-   (method + established baseline: Investigation Log, "CPU/GPU AE Baseline").
+    diffuse `basecolor × (1−metallic) × N·L`,
+    specular `F0 = mix(0.04, basecolor, metallic)`.
+    `MAT_GLASS` and `MAT_EMISSIVE` remain separate classes.
+4. DONE (item 4): Multiply AO into the ambient and per-light diffuse terms in
+   both backends; specular lobe + F0 mirror deliberately untouched.
+5. DONE (item 5): Rebaseline after item 4 — 127,575 differing pixels
+   (Investigation Log, "CPU/GPU AE Baseline").
 
 ### Phase 2 — KHR_materials_iridescence
 The visual payoff of the model; the extension is not even parsed today.
@@ -208,7 +213,64 @@ material — commit recording this baseline) — **127,611** differing pixels
 132,978 is real parity from the unified material (see the glass-region
 section: the outside pixels are all lamp metal, now F0-tinted per pixel);
 the residual is the same documented CPU-recursive-vs-GPU-iterative split,
-not noise to tune toward.
+not noise to tune toward. Verified reproducible at the item-4 baseline
+(HEAD before the AO change): identical three-way split.
+
+**Rebaseline after item 4 (AO)** — AO (ORM.R) multiplied into the ambient
+term and the per-light diffuse terms in both backends (unified PBR, glass,
+subsurface, and the emissive-surface diffuse pass); the specular lobe and
+the F0-weighted mirror are deliberately NOT AO-attenuated (decision +
+rationale below). Same b2c242f mask — **127,575** differing pixels (16.22%),
+sum_abs_err 10,676,607, max channel err 80. Masked split: inside 110,398 /
+10,619,930; outside 17,177 / 56,677. Tripwire check: the differing-pixel
+*count* moved by only −36 (−0.03%) and the spatial split is unchanged
+(86.53% → 86.54% inside share) — the same pixels, so CPU/GPU agreement
+holds at the established tolerance and nothing was patched. The AE
+*magnitude* (sum_abs_err) fell ~13% overall: the glass-path residual error
+scales with local brightness, and AO darkens the occluded glass region, so
+the same traversals now differ by smaller 8-bit deltas. Lower is not better
+here; the counts are the parity signal.
+
+**Item-4 decision — AO does NOT attenuate specular or the mirror.**
+Baked AO (the ORM.R channel) is a hemispherical-occlusion estimate: it
+models how much of the local hemisphere is blocked, which is exactly what
+attenuates ambient/indirect light and (approximately) direct *diffuse*
+light, whose BRDF integrates over that same hemisphere. The specular lobe
+responds from a single narrow direction (the half-vector direction), and
+the F0-weighted mirror is a direct directional reflection of scene
+geometry — hemispherical AO carries no information about occlusion along
+those specific directions. Straight-multiplying specular by diffuse AO
+produces the classic "highlights dim in crevices" dusty-metal artifact;
+renderers that DO apply AO to specular use contact-hardening *boosts*
+(local curvature raising F0 in crevices), not plain attenuation (three.js
+`aoMap`, the target framework for this model, applies occlusion to
+indirect diffuse only). Keeping specular/mirror untouched also keeps the
+item-3 F0 work intact and makes the pixel delta attributable to exactly
+the shaded ambient/diffuse pixels.
+
+**Item-4 judgment calls:** (1) AO is applied to `MAT_GLASS`'s ambient and
+per-light diffuse — an explicit choice, not an artifact of reading
+"ambient + per-light diffuse" as material-agnostic. The glass material
+(IridescenceLampTransmissionIridescence) references the same ORM atlas, so
+valid baked AO exists in its UV region and item 2's plumbing already samples
+`sao` per pixel on the glass path; the glass branch has the same shared
+ambient term and a plain `sc × diff × lf` diffuse as every other material, so
+consuming AO there is consistent. The exposure is small: AO touches only the
+glass surface's ambient/diffuse film — its dominant contributions (transmitted
+light scaled by base color, IOR/F0 reflections) are the specular/directional
+terms the spec decision already excludes. Exempting glass would special-case
+a single material on the shared ambient line for no physical reason; item 3's
+"MAT_GLASS stays separate and untouched" meant not merging it into the unified
+PBR class, not shielding it from AO. (The subsurface branch follows the same
+uniform rule — vacuous here: no subsurface meshes in this scene and analytic
+spheres carry `ao = 1.0`; emissive returns before these terms so is
+structurally unaffected; the floor has no UVs/ORM so is unchanged.)
+(2) The emissive-surface light path's diffuse pass
+(`sc × kd × G/pdf`) also takes AO — it is a per-light diffuse in
+scenes that use emissive lights; IridescenceLamp has no emissive
+material (num_emissive = 0) so that path is untested by this render.
+(3) In each backend `× ao` was inserted at one fixed position in each
+product, preserving every pre-existing factor order (no reassociation).
 
 **Origin check for 133,752:** a previously cited figure of 133,752 (17.0%) does not
 appear anywhere in repo history — `git log -S "133,752" -S "133752" --all` returns
@@ -271,6 +333,21 @@ F0-weighted mirror; same mask from b2c242f, same method):
 - outside: 17,195 differing / sum_abs_err 55,346 (2.69% of its 638,928 px)
 - inside share of total differing: **86.53%**
 
+**Mask used:** the committed canonical `test_scenes/lamp_glass_mask.ppm`
+(see the "Mask file (canonical)" note above the first measurement) — rebuilt
+from b2c242f renders for item 4 and verified to reproduce the 147,504-px
+region exactly. Split below uses that file, not a HEAD-regenerated mask.
+
+**Measured after item 4 (AO on ambient + per-light diffuse; specular and
+F0-weighted mirror untouched; same mask, same method):**
+- inside: 110,398 differing / sum_abs_err 10,619,930 (74.84% of region)
+- outside: 17,177 differing / sum_abs_err 56,677 (2.69% of its 638,928 px)
+- inside share of total differing: **86.54%**
+- pixel count held to −36 (127,611 → 127,575); the AE *magnitude* fell
+  ~13% (12,260,697 → 10,676,607) because the glass-path residual divergence
+  is scaled down by the common AO factor in occluded regions — same pixels,
+  smaller errors, not a parity fix.
+
 Composition of the outside band (diagnosed at b2c242f with a sky-only
 reference render): **all** 21,193 outside differing pixels sat on the lamp
 shade/body (the `MAT_METALLIC` meshes); zero on sky — sky
@@ -307,9 +384,9 @@ separable from float noise out of two images.
   materials, scenes, transforms).
 - **Extensions:** KHR_materials_transmission, KHR_materials_ior parsed and
   applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence not
-  parsed. Textures: baseColorTexture + ORM wired on both backends — G
-  (roughness) and B (metallic, in the unified plastic/metallic PBR); R
-  (AO) plumbed, pending Phase 1 item 4.
+   parsed. Textures: baseColorTexture + ORM wired on both backends — G
+   (roughness), B (metallic, in the unified plastic/metallic PBR), R
+   (AO on ambient + per-light diffuse; specular/F0-mirror un-AO'd, item 4).
 - **Diagnostics:** `--mesh-stats` flag, per-mesh degenerate triangle analysis, accessor
   metadata, index range checks, JSON output to `mesh_stats.json`.
 - **Tested with:** Box, Suzanne, Lantern, WaterBottle, Avocado, BoomBox,

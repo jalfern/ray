@@ -543,8 +543,6 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
-    (void)sphere_ao;
-
     if (mat == MAT_EMISSIVE) return sc;
 
     /* Merged plastic+metallic PBR params (per pixel):
@@ -572,16 +570,18 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         float spec = powf(fmaxf(0.0f, dot(n, half)), spec_exp);
         float lf = sf ? 0.0f : 1.0f;
 
+        /* AO (ORM.R) attenuates the ambient and diffuse terms only; the
+           specular lobe and the F0-weighted mirror are untouched. */
         if (mat == MAT_SUBSURFACE) {
             float bdiff = fmaxf(0.0f, dot(mul(n, -1), light_dir));
-            lit = add(lit, add(mul(sc, diff * lf * 0.7f),
-                              add(mul(sc, bdiff * lf * 0.3f),
+            lit = add(lit, add(mul(sc, diff * lf * 0.7f * sphere_ao),
+                              add(mul(sc, bdiff * lf * 0.3f * sphere_ao),
                                   mul(sc, spec * spec_str * lf))));
         } else if (mat == MAT_GLASS) {
-            lit = add(lit, add(mul(sc, diff * lf), mul(sc, spec * spec_str * lf)));
+            lit = add(lit, add(mul(sc, diff * lf * sphere_ao), mul(sc, spec * spec_str * lf)));
         } else {
-            /* Merged plastic+metallic PBR: diffuse * (1-metallic), specular F0. */
-            lit = add(lit, add(mul(mul(sc, kd), diff * lf), mul(f0, spec * spec_str * lf)));
+            /* Merged plastic+metallic PBR: diffuse * (1-metallic) * AO, specular F0. */
+            lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(f0, spec * spec_str * lf)));
         }
     }
 
@@ -619,12 +619,12 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (vis) {
             V le = emissive[ei].emitted;
             V em_contrib = mul(le, G / pdf);
-            V emd = mul(sc, kd);
+            V emd = mul(sc, kd * sphere_ao);
             lit = add(lit, (V){emd.x * em_contrib.x, emd.y * em_contrib.y, emd.z * em_contrib.z});
         }
     }
 
-    V ambient = mul(sc, 0.15f);
+    V ambient = mul(sc, 0.15f * sphere_ao);
     V base_color = add(ambient, lit);
 
     if (mat == MAT_SUBSURFACE) return base_color;
