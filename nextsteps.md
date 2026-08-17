@@ -191,7 +191,9 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED
+**Status:** BASELINE ESTABLISHED — current: **127,575** differing px /
+sum_abs_err 10,676,607 / max channel err 80 (masked: inside 110,398 /
+10,619,930; outside 17,177 / 56,677) — post-item-4 AO, commit 91bae3b.
 **Method:** `make`; render CPU (`./ray2 --cpu <scene>`) and GPU (`./ray2 <scene>`)
 with a copy of `test_scenes/scene_lamp.json` that omits the `"output"` key, so each
 writes its PPM to stdout (a `28T`/`GPU` prefix line precedes the PPM header — the
@@ -214,15 +216,18 @@ material — commit recording this baseline) — **127,611** differing pixels
 section: the outside pixels are all lamp metal, now F0-tinted per pixel);
 the residual is the same documented CPU-recursive-vs-GPU-iterative split,
 not noise to tune toward. Verified reproducible at the item-4 baseline
-(HEAD before the AO change): identical three-way split.
+(HEAD before the AO change): identical three-way split. Superseded as the
+current baseline by the item-4 AO rebaseline below.
 
-**Rebaseline after item 4 (AO)** — AO (ORM.R) multiplied into the ambient
-term and the per-light diffuse terms in both backends (unified PBR, glass,
-subsurface, and the emissive-surface diffuse pass); the specular lobe and
-the F0-weighted mirror are deliberately NOT AO-attenuated (decision +
-rationale below). Same b2c242f mask — **127,575** differing pixels (16.22%),
-sum_abs_err 10,676,607, max channel err 80. Masked split: inside 110,398 /
-10,619,930; outside 17,177 / 56,677. Tripwire check: the differing-pixel
+**Rebaseline after item 4 (AO) — CURRENT BASELINE** — AO (ORM.R) multiplied
+into the ambient term and the per-light diffuse terms in both backends
+(unified PBR, glass, subsurface, and the emissive-surface diffuse pass); the
+specular lobe and the F0-weighted mirror are deliberately NOT AO-attenuated
+(decision + rationale below). Same canonical mask — **127,575** differing
+pixels (16.22%), sum_abs_err 10,676,607, max channel err 80. Masked split:
+inside 110,398 / 10,619,930; outside 17,177 / 56,677. This is the current
+reference for future CPU/GPU parity work on this scene. Tripwire check: the
+differing-pixel
 *count* moved by only −36 (−0.03%) and the spatial split is unchanged
 (86.53% → 86.54% inside share) — the same pixels, so CPU/GPU agreement
 holds at the established tolerance and nothing was patched. The AE
@@ -339,7 +344,7 @@ from b2c242f renders for item 4 and verified to reproduce the 147,504-px
 region exactly. Split below uses that file, not a HEAD-regenerated mask.
 
 **Measured after item 4 (AO on ambient + per-light diffuse; specular and
-F0-weighted mirror untouched; same mask, same method):**
+F0-weighted mirror untouched; same mask, same method) — CURRENT:**
 - inside: 110,398 differing / sum_abs_err 10,619,930 (74.84% of region)
 - outside: 17,177 differing / sum_abs_err 56,677 (2.69% of its 638,928 px)
 - inside share of total differing: **86.54%**
@@ -347,6 +352,12 @@ F0-weighted mirror untouched; same mask, same method):**
   ~13% (12,260,697 → 10,676,607) because the glass-path residual divergence
   is scaled down by the common AO factor in occluded regions — same pixels,
   smaller errors, not a parity fix.
+
+**Current glass-region share:** treat **110,398** (rendered mask, post-item-4
+state) as the current glass-region share of the AE, superseding 110,416
+(post-item-3) and 111,785 (pre-item-3). As before it is a spatial count of
+differing pixels in the glass-influenced region, not a causal
+traversal-only count.
 
 Composition of the outside band (diagnosed at b2c242f with a sky-only
 reference render): **all** 21,193 outside differing pixels sat on the lamp
