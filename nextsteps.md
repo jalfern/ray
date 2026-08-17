@@ -248,6 +248,16 @@ pipeline is reproducible.
 `./ray2 --cpu test_scenes/scene_lamp_no_glass.json` / `./ray2 test_scenes/...`
 and the full scene (`scene_lamp.json` without its `output` key), 768×1024.
 
+**Mask file (canonical):** `test_scenes/lamp_glass_mask.ppm` is the masked
+region above, committed as a file (force-added: `*.ppm` is gitignored). It was
+built from b2c242f renders of the four images per the method, which
+reproduces the 147,504-px region exactly, so it is the reference for the
+masked AE splits recorded here. Rendered masks are state-dependent — a mask
+regenerated at HEAD instead measures 138,975 px (the item-3 F0 re-shade moved
+which sphere-occluded body pixels fall below the 1/255 rounding threshold) —
+so use the committed file; do not regenerate unless a state change genuinely
+moved the glass region and the region count is understood and noted.
+
 **Measured (mask, `ppm_diff.py full_cpu full_gpu mask.ppm`):** — at b2c242f
 - inside: 111,785 differing / sum_abs_err 12,214,931 (75.78% of region)
 - outside: 21,193 differing / sum_abs_err 59,278 (3.32% of its 638,928 px)
