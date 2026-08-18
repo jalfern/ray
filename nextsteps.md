@@ -285,7 +285,8 @@ machine on both backends, physical refraction for the volume faces).
   `attenuationColor [0.7, 0.45, 0.25]`, `attenuationDistance 0.2`;
   shares the external `IridescenceLamp.bin`, no copy) rendered by
   `test_scenes/scene_lamp_absorption.json` (output
-  `images/test_lamp_absorption.png`) / `..._stdout.json` (PPM stdout):
+  `images/reference/test_lamp_absorption.png`) /
+  `..._stdout.json` (PPM stdout):
   CPU/GPU AE with the canonical mask — **126,852** (16.13%) /
   7,619,587 / max 85; inside 109,720 (74.38%) / outside 17,132 (2.68%);
   inside share 86.49% — the same documented glass-traversal class as

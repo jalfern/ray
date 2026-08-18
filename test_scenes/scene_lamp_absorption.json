@@ -9,7 +9,7 @@
     "file": "envmaps/polyhaven_haven_01_1k.hdr",
     "intensity": 1.0
   },
-  "output": "images/test_lamp_absorption.png",
+  "output": "images/reference/test_lamp_absorption.png",
   "width": 768,
   "height": 1024
 }

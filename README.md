@@ -25,7 +25,7 @@ make test     # Render all test scenes
 ```
 ├── scenes/              # Scene JSON files
 ├── models/              # OBJ mesh files
-├── images/              # Rendered output images
+├── images/              # Rendered output images (only images/reference/ is tracked)
 ├── videos/              # Rendered animation videos
 ├── src/
 │   ├── main.cc          # Entry point, animation loop

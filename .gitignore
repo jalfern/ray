@@ -12,7 +12,8 @@ ray2
 
 # Generated assets
 frames/
-images/
+images/*
+!images/reference/
 videos/
 
 # macOS
