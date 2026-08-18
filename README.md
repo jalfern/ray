@@ -63,7 +63,7 @@ make test     # Render all test scenes
 | **glTF 2.0 importer** (core spec) | Done |
 | KHR_materials_transmission (glass) | Done |
 | KHR_materials_ior | Done |
-| KHR_materials_volume (thickness) | Parsed, unused |
+| KHR_materials_volume (Beer–Lambert absorption) | Done (ray-traced path length, both backends) |
 | Punctual lights (KHR_lights_punctual) | — |
 | KHR_materials_iridescence (thin film, three.js parity model) | Done (both backends) |
 | glTF baseColorTexture (sRGB→linear, bilinear) | Done |

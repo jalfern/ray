@@ -20,7 +20,13 @@
 - **KHR_materials_transmission:** Parsed and applied. Mesh 1 classified as "glass"
   with `transmission=1.0`, `ior=1.6`.
 - **KHR_materials_ior:** Parsed and applied. IOR per-material (1.6 for the glass sphere).
-- **KHR_materials_volume:** Parsed (`thicknessFactor`) but not used by the shader.
+- **KHR_materials_volume:** **Fully supported** (Phase 3 complete: parse →
+  plumbing → Beer–Lambert absorption on both backends, ray-traced path).
+  `GltfMaterial` carries `vol_th`, `att_r/g/b`, `att_dist`, `vol_tex`;
+  the shader charges `T = exp(−σ·x)` per in-medium segment on the
+  downstream reflection/refraction (three.js `volumeAttenuation` verbatim,
+  `include/volume.h` + MSL mirror; `make volcheck` parity 8.965e-08).
+  `thicknessTexture` is parsed/reported but not sampled.
 - **KHR_materials_iridescence:** **Fully supported** (Phase 2 complete:
   parse → load/plumbing → thin-film shader on both backends).
   `GltfMaterial` carries `iri_factor`, `iri_ior`, `iri_thin_min/max` (nm)
@@ -181,8 +187,167 @@ plumbing, shader on both backends).
    no new divergence class introduced by the shader.
 
 ### Phase 3 — KHR_materials_volume absorption
-`thicknessFactor` (0.005 on the lamp sphere) → Beer–Lambert absorption in the
-transmission path. Low visual impact on this model — do after Phase 2.
+`thicknessFactor` (0.005 on the lamp sphere) → Beer–Lambert absorption.
+**All four items done** (parse/plumbing, model + parity harness, medium state
+machine on both backends, physical refraction for the volume faces).
+
+1. DONE (item 1): **Parse + plumbing.** `GltfMaterial`
+   (`gltf_parser.cc`) gained `vol_th` (thicknessFactor), `att_r/g/b`,
+   `att_dist`, `vol_tex` (the `thicknessTexture` index); spec defaults
+   applied (0 / [1,1,1] / +inf / none); a `KHR_materials_volume` branch
+   reads them in `parse_materials`. `--mesh-stats` reports them: the
+   `[gltf:mat]` and `[mat]` lines gained `vol_th= att=(...) att_d=`
+   (verified exact: lamp mat 1 `vol_th=0.005 att=(1,1,1) att_d=inf`;
+   mats 0/2 on defaults). Values flow `GltfMaterial` → `MeshObj` →
+   (CPU `MeshObjData` @renderer.cc, GPU `MeshMatGpu`→`MeshMat`);
+   `MeshMat` extended 80→104 bytes (`static_assert` updated, upload
+   copies in `gpu_renderer.mm`); the scene-JSON `parse_mesh` path
+   initializes the fields explicitly (same realloc-not-zeroed trap as
+   Phase 2 item 2). Parse/plumbing-only gate: CPU+GPU renders of every
+   existing scene byte-identical pre/post (defaults ⇒ T ≡ 1 exactly).
+2. DONE (item 2): **Model + parity harness.** Deliberately ported
+   **verbatim the exact model the web viewer uses** — three.js
+   `volumeAttenuation` from
+   `web_viewer/node_modules/three/src/renderers/shaders/ShaderChunk/
+   transmission_pars_fragment.glsl.js`: `σ = −log(attenuationColor) /
+   attenuationDistance` per channel, `T = exp(−σ·x)` with the
+   inf-distance short-circuit. Single C implementation in
+   `include/volume.h` (`vol_transmittance`, `vol_sigma_nonzero`);
+   `shaders.metal` mirrors it in MSL with identical constants (same
+   convention as `thin_film.h`). **Parity:** `tools/vol_check.c`
+   (float32, 168-point grid over distance/color/distance-infinity
+   corners) vs `tools/vol_ref_check.mjs` (float64 port of the exact
+   GLSL text, with the usual literal self-check) via
+   `tools/vol_diff.py` — `make volcheck`: max abs diff **8.965e-08**
+   (gate 1e-3), PASS.
+3. DONE (item 3): **Medium state machine (both backends).** A ray
+   carries the medium it is traveling in: CPU `Medium {ior, cr, cg, cb,
+   att_dist}` (`med_air()` = default) passed through the recursive
+   `trace_ray`; GPU `stk_md[]` (float4: ior, cr, cg, cb) + `stk_ma[]`
+   (attenuation distance) on the iterative stack, air/`INFINITY`
+   pre-filled. Charge: at any hit while in an absorbing medium
+   (`ior > 1`), `Tseg = vol_transmittance(t_hit, …)` multiplies the
+   *downstream* contributions — the reflection ray and the refraction
+   ray — i.e. each segment inside the medium is charged exactly once, on
+   both paths. Entry/exit classification: hit normals are **always
+   flipped to face the ray** (`hit_mesh_bvh` / the GPU mirror), so the
+   legacy `entering = cos_i < 0` flag can never fire on a mesh face;
+   `hit_mesh_bvh` therefore also reports the **pre-flip** sign
+   (`side_out`: front / backface of the stored normal — a shell's
+   stored normal always faces the non-medium side, so front-cross =
+   enter the volume, back-cross = exit to air; verified correct for the
+   two-surface lamp wall, item 4 note). A `thicknessFactor > 0`
+   boundary sets/clears the medium accordingly; otherwise the incoming
+   medium carries (homogeneous). Two fixes found while building item 3:
+   (a) **environment escape:** a ray leaving the scene while inside an
+   absorbing medium returns 0 (T(∞) = 0) instead of the raw environment
+   — previously dead code, now the legitimate end state; (b) **seam
+   push:** an origin offset along the refracted direction leaves the
+   ray glued to the entry seam, where a neighbor triangle's backface ~1e-4
+   later produced a spurious in-medium hit that falsely "exited" the
+   medium before the real chord was charged; on volume entry the
+   refracted origin is additionally pushed along the (flipped) normal
+   (`+ n·EPS`), straight into the volume. **Control gate** (gated on
+   `vol_sigma_nonzero` — σ ≠ 0): renders of every scene without real
+   attenuation are **byte-identical to the HEAD build**, 0 differing
+   pixels, both backends.
+4. DONE (item 4): **Physical refraction for the absorbing-volume faces.**
+   Found while verifying item 3: under the always-flipped-normal
+   convention, `entering` never fires on mesh glass, so *every* legacy
+   glass hit was shaded with the air→air "exit" parameters — the entry
+   inverts its refraction bending and TIR-rings above
+   sin θᵢ ≈ 1/ior, and the *exit* refracts the ray back into the glass,
+   which is where the famous in-glass walk (the 28.7M-hit stat) comes
+   from. For an absorbing volume's faces the refraction now uses the
+   correct side: front (entering, `side = 1`): outward normal,
+   η = 1/ior; back (exiting): in-wall normal (the flipped one),
+   η = ior. Everything else — spheres, and any non-volume (or
+   non-absorbing, σ = 0) mesh glass — keeps the legacy parameters
+   **exactly**, which is what keeps the canonical baseline untouched.
+   Consequence for the absorption scene: the in-glass walk is gone
+   (clean front→wall→hollow→wall→back traversal, two real chords per
+   pass) and the intra-back-end parity actually *improves* there
+   (tripwire below).
+
+**Control / tripwires (post Phase 3, current):**
+- **Control gate:** new build vs the git-HEAD baseline build
+  (`/tmp/ray_base`, `git archive HEAD | tar -x`): lamp scene CPU **0**
+  differing px / sum_abs_err 0 / max 0, GPU **0** / 0 / 0 — byte-
+  identical. (The σ ≠ 0 gate; IridescenceLamp's own sphere carries
+  `thicknessFactor = 0.005` but white/+inf attenuation.)
+- **Canonical lamp AE (masked, same canonical mask):** **127,582**
+  (16.22%) / 9,682,442 / max 80; inside 110,453 (74.88%) / outside
+  17,129 (2.68%); inside share 86.57% — **unchanged** vs the Phase 2
+  current baseline above, exactly as the gate requires.
+- **New absorption reference (new scene, for the record):**
+  `test_scenes/IridescenceLamp/IridescenceLamp_absorption.gltf`
+  (lamp mat 1 volume: `thicknessFactor 0.005`,
+  `attenuationColor [0.7, 0.45, 0.25]`, `attenuationDistance 0.2`;
+  shares the external `IridescenceLamp.bin`, no copy) rendered by
+  `test_scenes/scene_lamp_absorption.json` (output
+  `images/test_lamp_absorption.png`) / `..._stdout.json` (PPM stdout):
+  CPU/GPU AE with the canonical mask — **126,852** (16.13%) /
+  7,619,587 / max 85; inside 109,720 (74.38%) / outside 17,132 (2.68%);
+  inside share 86.49% — the same documented glass-traversal class as
+  the canonical scene (slightly *better*: the corrected refraction
+  aligns the two backends' in-glass paths). Zone check (absorption vs
+  the lamp render): all **108,953** changed pixels sit in the sphere
+  zone (y ≥ 517), **0** outside; **0** bright→near-black pixels.
+  Mean zone delta R −5.4 / G −8.2 / B −6.2 (max 101) at d = 0.2; a
+  strong variant (d = 0.08, temp asset, not committed) gives R −61.9 /
+  G −55.7 / B −35.5 (max 176, n = 192,915) — strictly monotone in
+  1/distance. The per-channel *ordering* of a zonewise mean is not the
+  Beer–Lambert order because the delta mixes the two T-sites (the
+  transmitted part, blue-dominant as expected, plus the in-medium
+  re-reflection part, white-dominant base) and the item-4 refraction
+  re-lighting — `T` itself is verified per-term by the volcheck grid.
+  Visual: the lamp interior (iridescent body) reads clearly through the
+  glass with a subtle warm cast; sky-through-glass is not blackened;
+  floor/shade outside the sphere pixel-identical to the lamp render.
+
+**Phase 3 judgment calls:**
+1. **Actual ray-traced distance** (planned Option B, user-approved) per
+   the KHR instruction for ray-traced renderers, instead of the
+   thicknessFactor proxy three.js's *shading* model uses —
+   `vol_transmittance`'s `x` argument is the measured in-medium path
+   length, segment by segment. Consequence, confirmed against the data:
+   IridescenceLamp's glass is a **two-surface thin wall** — 2,990
+   verts = 2 × 1,495, radii span 0.0939→0.0980 (wall ≈ 0.0041, matching
+   `thicknessFactor` 0.005), measured from the `.bin` position
+   accessor — so the true in-glass path per pass is ≈ 2·wall/cosθ
+   (≈0.008–0.02), not a solid-sphere diameter. That is exactly why the
+   absorption is a subtle warm cast rather than a tinted filter on
+   this model (the original plan's "low visual impact" prediction
+   held), while a solid glass sphere with the same attenuation params
+   would be strongly tinted.
+2. **`thicknessTexture`: parse + report only** (user-approved) — the
+   `vol_tex` index is stored and shown by `--mesh-stats`; no per-pixel
+   sampling (a path-length texture needs the ray, not a surface UV;
+   out of scope for this phase).
+3. **Surface terms at a hit are not attenuated** (base color,
+   specular lobe, shadow rays, emissive) — only light that has *traveled*
+   through the medium (the downstream reflection/refraction
+   contributions) is charged. Consistent single-slot medium: nested
+   volumes are not supported (pre-existing limitation, same as the
+   single `skip` mesh); two different media on one path are impossible
+   in this scene graph anyway.
+4. **Tessellation-seam stubs** (documented, not chased): at the entry
+   seam a neighbor triangle's backface ~1.4e-3 behind the hit flips the
+   medium to air for one segment, re-set at the next boundary; the
+   charge there is ~1 (T(0.0014) ≈ 0.99) — a ~1–2% slice per pass,
+   not worth the per-mesh region plumbing it would take to eliminate.
+5. **Legacy refraction remains on the non-volume glass path**
+   (spheres are correct — their normals are not flipped; any mesh glass
+   without σ > 0 keeps the inverted-entry/exit bug as-is to preserve
+   the canonical baseline). Fixing it generally would move the 127,582
+   baseline and deserves its own phase with its own rebaseline.
+
+### Rebaseline note (no rebaseline occurred)
+Phase 3 added code but changed **zero** pixels on every existing scene
+(the σ ≠ 0 gate — see item 3/4 above); the current CPU/GPU baseline of
+record remains the Phase 2 one: **127,582 / 9,682,442 / max 80**,
+inside 110,453 / outside 17,129, inside share 86.57%. The absorption
+scene above is a new reference for its own new scene, not a rebaseline.
 
 ### Medium Term
 - **Punctual lights (KHR_lights_punctual)** from glTF.
@@ -202,6 +367,14 @@ transmission path. Low visual impact on this model — do after Phase 2.
   `shaders.metal` uses iterative stack-based traversal. Surface diffuse terms now match,
   but transmitted/refracted light paths differ. Full parity requires unifying the
   traversal structure.
+- **Legacy glass refraction is wrong on mesh faces (pre-existing):** hit normals are
+  always flipped to face the ray, so the `entering` flag never fires on mesh glass and
+  every hit is shaded with air→air "exit" parameters — inverted entry bending
+  (TIR ring above sin θᵢ ≈ 1/ior), and the exit refracts the ray back into the glass
+  (the in-glass walk). Phase 3 corrected this *only* for absorbing-volume faces
+  (σ > 0) so the canonical 127,582 baseline stays untouched; general mesh-glass
+  refraction still carries the bug and will need its own phase + rebaseline
+  (spheres are unaffected — their normals are not pre-flipped).
 - **Scale-relative determinant threshold:** The fix `|det| < 1e-7 * mean(|e1|², |e2|²)`
   is a heuristic. Very small triangles with near-parallel rays could still produce false
   rejections. A more principled approach would normalize the determinant by edge lengths.
@@ -484,12 +657,22 @@ separable from float noise out of two images.
 - **Issue 6 (Camera zenith/nadir singularity):** FIXED
 - **Glass traversal parity:** DOCUMENTED LIMITATION
 - **Glass sphere zero pixels (IridescenceLamp):** FIXED — scale-relative det threshold
+- **Mesh-glass refraction side params (inverted entry / exit reflected back
+  in-glass):** FIXED on absorbing-volume faces only (Phase 3 item 4, σ > 0
+  gate); the non-volume path still carries the legacy bug to hold the
+  canonical baseline — see "Known Limitations"
+- **KHR_materials_volume absorption:** DONE (Phase 3, items 1–4; volcheck
+  parity 8.965e-08; control gate byte-identical; absorption-scene reference
+  recorded in the Phase 3 section)
 
 ### glTF Importer
 - **Core spec:** Full glTF 2.0 importer (buffers, views, accessors, meshes, nodes, cameras,
   materials, scenes, transforms).
 - **Extensions:** KHR_materials_transmission, KHR_materials_ior parsed and
-  applied. KHR_materials_volume parsed, unused. KHR_materials_iridescence
+  applied. KHR_materials_volume fully supported (Phase 3: parse + plumbing +
+  Beer–Lambert absorption with ray-traced path length on both backends —
+  `include/volume.h`, verbatim three.js `volumeAttenuation`; see Phase 3).
+  KHR_materials_iridescence
   fully supported (parse + plumbing + thin-film shader on both backends;
   model is a verbatim port of the vendored three.js chunks —
   `include/thin_film.h`; see Phase 2 item 3). Textures: baseColorTexture +
