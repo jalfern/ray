@@ -767,10 +767,14 @@ typedef struct {
     float iri_ior;         /* iridescenceIor, default 1.3 */
     float iri_thin_min;    /* thickness minimum, nm, default 100 */
     float iri_thin_max;    /* thickness maximum, nm, default 400 */
+    float vol_th;          /* thicknessFactor, default 0 (thin-walled) */
+    float att_r, att_g, att_b; /* attenuationColor, default (1,1,1) */
+    float att_dist;        /* attenuationDistance, default +inf */
     int base_color_tex;    /* texture index, -1 = none */
     int tex_coord;         /* UV set index (0 = TEXCOORD_0) */
     int metallic_roughness_tex; /* texture index, -1 = none */
     int iri_tex;           /* thickness texture index, -1 = none */
+    int vol_tex;           /* thicknessTexture index, -1 = none (parsed, reported only) */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1057,6 +1061,12 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].tex_coord = 0;
         mats[n].metallic_roughness_tex = -1;
         mats[n].iri_tex = -1;
+        mats[n].vol_th = 0.0f;
+        mats[n].att_r = 1.0f;
+        mats[n].att_g = 1.0f;
+        mats[n].att_b = 1.0f;
+        mats[n].att_dist = INFINITY;
+        mats[n].vol_tex = -1;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1243,6 +1253,58 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                         }
                         if (*ix == '}') ix++;
                         ex = ix;
+                    } else if (strcmp(ek, "KHR_materials_volume") == 0) {
+                        const char* vx = ex;
+                        skip_ws_ptr(&vx);
+                        if (*vx == '{') vx++;
+                        while (*vx && *vx != '}') {
+                            char vk[64];
+                            const char* vsave = vx;
+                            if (!parse_json_string(&vx, vk, sizeof(vk))) { vx = vsave; skip_value(&vx); continue; }
+                            skip_ws_ptr(&vx);
+                            if (*vx == ':') vx++;
+                            skip_ws_ptr(&vx);
+                            if (strcmp(vk, "thicknessFactor") == 0) {
+                                float fv; if (parse_json_number(&vx, &fv)) mats[n].vol_th = fv;
+                            } else if (strcmp(vk, "attenuationDistance") == 0) {
+                                float fv; if (parse_json_number(&vx, &fv)) mats[n].att_dist = fv;
+                            } else if (strcmp(vk, "attenuationColor") == 0) {
+                                float att_c[3];
+                                if (parse_float_array(&vx, att_c, 3)) {
+                                    mats[n].att_r = att_c[0];
+                                    mats[n].att_g = att_c[1];
+                                    mats[n].att_b = att_c[2];
+                                }
+                            } else if (strcmp(vk, "thicknessTexture") == 0) {
+                                const char* tx = vx;
+                                skip_ws_ptr(&tx);
+                                if (*tx == '{') tx++;
+                                while (*tx && *tx != '}') {
+                                    char tk[64];
+                                    const char* tsave = tx;
+                                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ':') tx++;
+                                    skip_ws_ptr(&tx);
+                                    float fv;
+                                    if (strcmp(tk, "index") == 0) {
+                                        if (parse_json_number(&tx, &fv)) mats[n].vol_tex = (int)fv;
+                                    } else {
+                                        skip_value(&tx);
+                                    }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ',') tx++;
+                                }
+                                if (*tx == '}') tx++;
+                                vx = tx;
+                            } else {
+                                skip_value(&vx);
+                            }
+                            skip_ws_ptr(&vx);
+                            if (*vx == ',') vx++;
+                        }
+                        if (*vx == '}') vx++;
+                        ex = vx;
                     } else {
                         skip_value(&ex);
                     }
@@ -1260,11 +1322,14 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         if (*obj == '}') obj++;
 
         if (g_gltf_debug_enabled) {
-            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d\n",
+            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
                     n, mats[n].transmission, mats[n].ior,
                     mats[n].iri_factor, mats[n].iri_ior,
                     mats[n].iri_thin_min, mats[n].iri_thin_max,
-                    mats[n].iri_tex);
+                    mats[n].iri_tex,
+                    mats[n].vol_th,
+                    mats[n].att_r, mats[n].att_g, mats[n].att_b,
+                    mats[n].att_dist, mats[n].vol_tex);
         }
 
         cur = obj;
@@ -1491,6 +1556,12 @@ static void build_gltf_scene(
                 mo->tex_index = -1;
                 mo->orm_tex_index = -1;
                 mo->iri_tex_index = -1;
+                mo->vol_th = 0.0f;
+                mo->att_r = 1.0f;
+                mo->att_g = 1.0f;
+                mo->att_b = 1.0f;
+                mo->att_dist = INFINITY;
+                mo->vol_tex_index = -1;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1503,6 +1574,9 @@ static void build_gltf_scene(
                 float iri_ior = 1.3f;
                 float iri_min = 100.0f;
                 float iri_max = 400.0f;
+                float vol_th = 0.0f;
+                float att_r = 1.0f, att_g = 1.0f, att_b = 1.0f;
+                float att_dist = INFINITY;
                 if (mat_idx >= 0 && mat_idx < num_materials) {
                     memcpy(base_color, materials[mat_idx].base_color, 4 * sizeof(float));
                     metallic = materials[mat_idx].metallic;
@@ -1514,6 +1588,11 @@ static void build_gltf_scene(
                     iri_ior = materials[mat_idx].iri_ior;
                     iri_min = materials[mat_idx].iri_thin_min;
                     iri_max = materials[mat_idx].iri_thin_max;
+                    vol_th = materials[mat_idx].vol_th;
+                    att_r = materials[mat_idx].att_r;
+                    att_g = materials[mat_idx].att_g;
+                    att_b = materials[mat_idx].att_b;
+                    att_dist = materials[mat_idx].att_dist;
                     if (materials[mat_idx].iri_tex >= 0) {
                         int tex_idx = materials[mat_idx].iri_tex;
                         if (tex_idx < num_tex) {
@@ -1522,22 +1601,38 @@ static void build_gltf_scene(
                                 mo->iri_tex_index = img_idx;
                         }
                     }
+                    if (materials[mat_idx].vol_tex >= 0) {
+                        int tex_idx = materials[mat_idx].vol_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->vol_tex_index = img_idx;
+                        }
+                    }
                 }
                 mo->iri_factor = iri_factor;
                 mo->iri_ior = iri_ior;
                 mo->iri_thin_min = iri_min;
                 mo->iri_thin_max = iri_max;
+                mo->vol_th = vol_th;
+                mo->att_r = att_r;
+                mo->att_g = att_g;
+                mo->att_b = att_b;
+                mo->att_dist = att_dist;
 
                 /* Debug: print final material props */
                 if (g_gltf_debug_enabled) {
-                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d\n",
+                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
                             out->num_meshes, mat_idx,
                             base_color[0], base_color[1], base_color[2], base_color[3],
                             metallic, roughness,
                             emissive[0], emissive[1], emissive[2],
                             transmission, ior,
                             iri_factor, iri_ior, iri_min, iri_max,
-                            mo->iri_tex_index);
+                            mo->iri_tex_index,
+                            vol_th,
+                            att_r, att_g, att_b,
+                            att_dist, mo->vol_tex_index);
                 }
 
                 /* Classify material. */

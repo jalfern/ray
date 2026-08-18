@@ -5,6 +5,7 @@
 #include "../envmap/envmap.h"
 #include "bvh.h"
 #include "thin_film.h"
+#include "volume.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 
 /* ── Debug counters ────────────────────────────────────────── */
 static int g_debug_frame_done = 0;
+
 static int g_hit_tri_tests[256] = {0};
 static int g_hit_tri_hits[256] = {0};
 

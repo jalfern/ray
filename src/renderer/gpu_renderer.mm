@@ -113,6 +113,12 @@ typedef struct {
     float iri_ior;
     float iri_thin_min;
     float iri_thin_max;
+    float vol_th;
+    float att_r;
+    float att_g;
+    float att_b;
+    float att_dist;
+    int vol_tex_index;
 } MeshMatGpu;
 
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
@@ -120,7 +126,7 @@ static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.meta
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
 static_assert(sizeof(SceneGpu) == 52, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 80, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 104, "MeshMatGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
 static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -296,11 +302,17 @@ Image* render_frame_gpu(const Scene* scene) {
                   mats[m].tex_index = mo->tex_index;
                   mats[m].orm_tex_index = mo->orm_tex_index;
                   mats[m].iri_tex_index = mo->iri_tex_index;
-                  mats[m].iri_factor = mo->iri_factor;
-                  mats[m].iri_ior = mo->iri_ior;
-                  mats[m].iri_thin_min = mo->iri_thin_min;
-                  mats[m].iri_thin_max = mo->iri_thin_max;
-                  mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
+                   mats[m].iri_factor = mo->iri_factor;
+                   mats[m].iri_ior = mo->iri_ior;
+                   mats[m].iri_thin_min = mo->iri_thin_min;
+                   mats[m].iri_thin_max = mo->iri_thin_max;
+                   mats[m].vol_th = mo->vol_th;
+                   mats[m].att_r = mo->att_r;
+                   mats[m].att_g = mo->att_g;
+                   mats[m].att_b = mo->att_b;
+                   mats[m].att_dist = mo->att_dist;
+                   mats[m].vol_tex_index = mo->vol_tex_index;
+                   mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;
                  mats[m].tex_color2[0] = mo->tex_color2.x; mats[m].tex_color2[1] = mo->tex_color2.y; mats[m].tex_color2[2] = mo->tex_color2.z;

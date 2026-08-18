@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 static char* skip_ws(char* p) {
     if (!p) return NULL;
@@ -231,6 +232,12 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
     m->iri_ior = 1.3f;
     m->iri_thin_min = 100.0f;
     m->iri_thin_max = 400.0f;
+    m->vol_th = 0.0f;
+    m->att_r = 1.0f;
+    m->att_g = 1.0f;
+    m->att_b = 1.0f;
+    m->att_dist = INFINITY;
+    m->vol_tex_index = -1;
     strcpy(m->material, "glass");
 
     char file_path[256] = {0};

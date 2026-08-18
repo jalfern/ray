@@ -77,6 +77,17 @@ $(TOOLS_BUILD)/gen_vase: $(TOOLS_DIR)/gen_vase.c
 	mkdir -p $(TOOLS_BUILD)
 	$(CXX) $(CXXFLAGS) $< -o $@ -lm
 
+$(TOOLS_BUILD)/vol_check: $(TOOLS_DIR)/vol_check.c
+	mkdir -p $(TOOLS_BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@ -lm
+
+# KHR_materials_volume math parity: float32 (CPU header) vs float64
+# (reference port of the three.js volumeAttenuation GLSL).
+volcheck: $(TOOLS_BUILD)/vol_check
+	$(TOOLS_BUILD)/vol_check > $(TOOLS_BUILD)/vol_cpu.txt
+	node tools/vol_ref_check.mjs > $(TOOLS_BUILD)/vol_ref.txt
+	python3 tools/vol_diff.py $(TOOLS_BUILD)/vol_cpu.txt $(TOOLS_BUILD)/vol_ref.txt
+
 test: $(TARGET)
 	@echo "Rendering torus..."
 	@./$(TARGET) scenes/scene_torus.json > /dev/null

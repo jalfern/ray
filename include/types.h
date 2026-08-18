@@ -53,6 +53,12 @@ typedef struct {
     float iri_ior;
     float iri_thin_min;
     float iri_thin_max;
+    float vol_th;
+    float att_r;
+    float att_g;
+    float att_b;
+    float att_dist;
+    int vol_tex_index;
     V pos;
     float scale;
     TextureData tex;
