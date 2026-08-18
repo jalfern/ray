@@ -557,6 +557,28 @@ static float3 tf_schlick_to_f0(float3 f, float f90, float cos_v) {
     return (f - float3(f90) * x5) / (1.0f - x5);
 }
 
+/* ── KHR_materials_volume: Beer-Lambert attenuation ─────────────
+ *  MSL port, operation-for-operation with include/volume.h
+ *  (reference model: three.js volumeAttenuation in
+ *  transmission_pars_fragment.glsl.js).  dist is the actual
+ *  ray-traced path length in the medium (KHR spec instruction to
+ *  ray tracers; three.js uses the material thickness parameter).
+ *  att_d == +inf short-circuits to float3(1) so default materials
+ *  leave renders byte-identical.
+ */
+static float3 vol_transmittance(float dist, float3 att_c, float att_d) {
+    if (isinf(att_d)) return float3(1.0f);
+    float3 coeff = -log(att_c) / att_d;
+    return exp(-coeff * dist);
+}
+
+/* 1 if any channel's attenuation coefficient is non-zero. */
+static int vol_sigma_nonzero(float3 att_c, float att_d) {
+    if (isinf(att_d)) return 0;
+    if (att_c.x == 1.0f && att_c.y == 1.0f && att_c.z == 1.0f) return 0;
+    return 1;
+}
+
 static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int sc,
                         device const TriGpu* tris, int tc, device const BvhNode* bvh, int nb,
                         device const MeshMat* mats, int nm,
@@ -571,6 +593,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
+    float4 stk_md[MAX_DEPTH + 2];  /* KHR_materials_volume medium: (ior, cr, cg, cb) */
+    float stk_ma[MAX_DEPTH + 2];   /* attenuationDistance, may be +inf */
     int stk_dp[MAX_DEPTH + 2];
     int stk = 0;
     float3 accum = float3(0.0f);
@@ -578,6 +602,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
     stk_o[stk] = (packed_float3)o;
     stk_d[stk] = (packed_float3)d;
     stk_th[stk] = (packed_float3)float3(1.0f);
+    stk_md[stk] = float4(1.0f, 1.0f, 1.0f, 1.0f);  /* air */
+    stk_ma[stk] = INFINITY;
     stk_dp[stk] = 0;
     stk++;
 
@@ -586,7 +612,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
         float3 ro = stk_o[stk];
         float3 rd = stk_d[stk];
         float3 thru = stk_th[stk];
+        float4 mid_c = stk_md[stk];
+        float mid_d = stk_ma[stk];
         int dp0 = stk_dp[stk];
+        bool in_med = mid_c.x > 1.0f;
 
         for (int depth = dp0; depth <= MAX_DEPTH; depth++) {
             float ts, tf;
@@ -626,6 +655,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             bool hf0 = hit_floor(ro, rd, tf);
 
             int hit_type = 0;
+            bool side_entry = true;   /* spheres always report their near face */
             float t_hit;
             float3 hit_n;
             float3 sc_col = float3(1.0f);
@@ -653,8 +683,11 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     smat = mats[mesh_idx].mat_type;
                 }
 
-                 hit_n = tri_normal(tris[mi].v0, tris[mi].v1, tris[mi].v2,
-                                     tris[mi].n0, tris[mi].n1, tris[mi].n2, mu, mv);
+                  hit_n = tri_normal(tris[mi].v0, tris[mi].v1, tris[mi].v2,
+                                      tris[mi].n0, tris[mi].n1, tris[mi].n2, mu, mv);
+                  /* Shell side from the pre-flip normal: volume entry/exit
+                     is decided from this — the flip below erases the sign. */
+                  side_entry = dot(hit_n, rd) < 0;
                   if (dot(hit_n, rd) > 0) hit_n = -hit_n;
                   mesh_uv = (1.0f - mu - mv) * tris[mi].t0 + mu * tris[mi].t1 + mv * tris[mi].t2;
             } else if (hf0) {
@@ -663,6 +696,9 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
 
             if (hit_type == 0) {
                 float3 env_col = has_env ? sample_envmap(env_tex, rd) : env_procedural(rd);
+                /* Infinite path in an absorbing medium: photon fully absorbed. */
+                if (in_med && vol_sigma_nonzero(float3(mid_c.y, mid_c.z, mid_c.w), mid_d))
+                    break;
                 accum += env_col * thru;
                 break;
             }
@@ -860,6 +896,14 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 na = entering ? n_hit : -n_hit;
             cos_i = entering ? -cos_i : cos_i;
 
+            /* KHR_materials_volume: charge the t_hit segment traveled in
+               the current medium to every downstream photon contribution.
+               Exactly (1,1,1) without a medium (or with default
+               attenuation) — leaves renders byte-identical. */
+            float3 Tseg = float3(1.0f);
+            if (in_med)
+                Tseg = vol_transmittance(t_hit, float3(mid_c.y, mid_c.z, mid_c.w), mid_d);
+
             float3 refl_d = reflect(rd, na);
             float3 refl_o = p + refl_d * EPS;
 
@@ -869,13 +913,37 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                    basecolor-tinted metal mirror at metallic=1). */
                 ro = refl_o;
                 rd = refl_d;
-                thru *= f0u;
+                thru = (thru * Tseg) * f0u;
                 continue;
             }
 
-            float n1 = entering ? 1.0f : sior;
-            float n2 = entering ? sior : 1.0f;
-            float eta = n1 / n2;
+            /* Hit normals are always flipped to face the ray, so at a
+               mesh face `entering` never fires and every legacy glass
+               hit above used air->...->air "exit" parameters.  At an
+               *absorbing* volume's front face the ray physically ENTERS
+               (air->glass: eta = 1/ior, outward normal); at the back
+               face it EXITS (glass->air: eta = ior, in-wall normal =
+               the flipped one).  Anything else keeps the legacy mistake
+               unchanged (byte-identical control gate). */
+            float3 n_refr = na;
+            float eta;
+            int midmesh = tris[mi].mesh_idx;
+            if (hit_type == 2 && midmesh >= 0 && midmesh < nm &&
+                mats[midmesh].vol_th > 0.0f &&
+                vol_sigma_nonzero(float3(mats[midmesh].att_r, mats[midmesh].att_g,
+                                         mats[midmesh].att_b),
+                                  mats[midmesh].att_dist)) {
+                if (side_entry) {
+                    eta = 1.0f / sior;
+                } else {
+                    n_refr = n_hit;
+                    eta = sior;
+                }
+            } else {
+                float n1 = entering ? 1.0f : sior;
+                float n2 = entering ? sior : 1.0f;
+                eta = n1 / n2;
+            }
             float k = 1.0f - eta * eta * (1.0f - cos_i * cos_i);
 
             float r0 = (1.0f - sior) / (1.0f + sior);
@@ -895,14 +963,51 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
 
             if (k > 0) {
                 float cos_t = sqrt(k);
-                float3 refr_d = rd * eta + na * (eta * cos_i - cos_t);
+                float3 refr_d = rd * eta + n_refr * (eta * cos_i - cos_t);
                 float3 refr_o = p + refr_d * EPS;
 
-                float3 cur_thru = thru;
+                /* Entering an absorbing volume: push along the (flipped)
+                   normal as well — straight into the volume.  A
+                   direction-only offset leaves the ray glued to the entry
+                   seam, where a neighbor back face produces a spurious
+                   in-medium hit ~1e-4 in that falsely "exits" the medium
+                   before the real chord is charged.  Gated on sigma != 0
+                   so white/+inf materials stay byte-identical. */
+                int mside_mid = tris[mi].mesh_idx;
+                if (hit_type == 2 && side_entry && mside_mid >= 0 && mside_mid < nm &&
+                    mats[mside_mid].vol_th > 0.0f &&
+                    vol_sigma_nonzero(float3(mats[mside_mid].att_r, mats[mside_mid].att_g,
+                                             mats[mside_mid].att_b),
+                                      mats[mside_mid].att_dist))
+                    refr_o = refr_o + na * EPS;
+
+                float3 cur_thru = thru * Tseg;
+
+                /* Downstream medium for the refracted ray: a volume
+                   boundary is a closed convex shell; crossing its front
+                   face lands inside the volume (medium = this material),
+                   crossing the back face exits it (air).  Otherwise the
+                   incoming medium carries through (homogeneous). */
+                float4 mid_rc = stk_md[stk];
+                float mid_dd = stk_ma[stk];
+                int mm = tris[mi].mesh_idx;
+                if (hit_type == 2 && mm >= 0 && mm < nm &&
+                    mats[mm].vol_th > 0.0f) {
+                    if (side_entry) {
+                        mid_rc = float4(sior, mats[mm].att_r, mats[mm].att_g, mats[mm].att_b);
+                        mid_dd = mats[mm].att_dist;
+                    } else {
+                        mid_rc = float4(1.0f, 1.0f, 1.0f, 1.0f);
+                        mid_dd = INFINITY;
+                    }
+                }
+
                 if (stk < MAX_DEPTH + 2) {
                     stk_o[stk] = (packed_float3)refr_o;
                     stk_d[stk] = (packed_float3)refr_d;
                     stk_th[stk] = (packed_float3)(cur_thru * wt * sc_col);
+                    stk_md[stk] = mid_rc;
+                    stk_ma[stk] = mid_dd;
                     stk_dp[stk] = depth + 1;
                     stk++;
                 }
@@ -913,7 +1018,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             } else {
                 ro = refl_o;
                 rd = refl_d;
-                thru *= wr;
+                thru = (thru * Tseg) * wr;
             }
         }
     }

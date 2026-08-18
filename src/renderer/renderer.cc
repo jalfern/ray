@@ -23,6 +23,20 @@ static int g_hit_tri_hits[256] = {0};
 #define AA_SAMPLES 16
 #define MAX_DEPTH 4
 
+/* KHR_materials_volume: the absorbing medium a ray currently travels
+   through.  ior 1.0 = air.  Single-slot model — the glass path already
+   hardcodes the outside medium as air, so only one medium is tracked
+   at a time (nested volumes are not resolved). */
+typedef struct {
+    float ior;
+    float cr, cg, cb;    /* attenuationColor, linear RGB */
+    float att_dist;      /* attenuationDistance, may be +inf */
+} Medium;
+
+static Medium med_air(void) {
+    return (Medium){1.0f, 1.0f, 1.0f, 1.0f, INFINITY};
+}
+
 static int mat_name_to_type(const char* name) {
     if (strcmp(name, "glass") == 0) return MAT_GLASS;
     if (strcmp(name, "plastic") == 0) return MAT_PLASTIC;
@@ -133,7 +147,8 @@ static int bbox_hit(V o, V d, const float* bmin, const float* bmax) {
 }
 
 static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
-                         TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx) {
+                          TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx,
+                          int* side_out) {
     float best_t = 1e9f;
     int hit = 0;
     float best_u = 0, best_v = 0;
@@ -174,6 +189,12 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         float nz = w * best_tri->n0[2] + best_u * best_tri->n1[2] + best_v * best_tri->n2[2];
         float len = sqrtf(nx*nx + ny*ny + nz*nz);
         if (len > EPS) { nx /= len; ny /= len; nz /= len; }
+        /* Side of the shell from the stored (pre-flip) normal: 1 = the ray
+           hits the front of the shell (outward normal faces the ray),
+           0 = it hits the inside (backface).  Volume entry/exit is decided
+           from this sign, because the returned normal is always flipped to
+           face the ray below. */
+        if (side_out) *side_out = (nx*d.x + ny*d.y + nz*d.z) < 0 ? 1 : 0;
         *hit_normal = (V){nx, ny, nz};
         if (dot(*hit_normal, d) > 0) *hit_normal = mul(*hit_normal, -1);
         out_uv[0] = w * best_tri->t0[0] + best_u * best_tri->t1[0] + best_v * best_tri->t2[0];
@@ -414,7 +435,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                    LightData* lights, int num_lights,
                    EmissiveSurf* emissive, int num_emissive,
                    int sample_idx, EnvMap* env,
-                   ImageTexture* textures, int num_textures) {
+                   ImageTexture* textures, int num_textures,
+                   Medium med) {
     if (depth > MAX_DEPTH) return (V){0,0,0};
 
     float ts, tf;
@@ -426,12 +448,13 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V mn = {0,0,0};
     float m_uv[2] = {0,0};
     int mi = -1;
+    int m_side = 1;  /* shell front(1)/back(0) side of the winning mesh hit */
     for (int i = 0; i < num_meshes; i++) {
         V hit_n;
         float tmi;
         float uv[2];
         if (meshes[i].num_bvh_nodes > 0 &&
-            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i) && tmi < tm) {
+            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &m_side) && tmi < tm) {
             tm = tmi; mi = i; mn = hit_n; m_uv[0] = uv[0]; m_uv[1] = uv[1];
         }
     }
@@ -440,6 +463,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     int hf = hit_floor(o, d, &tf);
 
     int hit_type = 0;
+    int side = 1;   /* spheres always report their near face (a front hit) */
     float t_hit;
     V hit_n;
     float sphere_col[3] = {1,1,1};
@@ -458,7 +482,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         sphere_mat = spheres[si].mat_type;
         sphere_metallic = (sphere_mat == MAT_METALLIC) ? 1.0f : 0.0f;
     } else if (hm && (!hf || tm < tf)) {
-        hit_type = 2; t_hit = tm; hit_n = mn;
+        hit_type = 2; t_hit = tm; hit_n = mn; side = m_side;
         sphere_col[0] = meshes[mi].col.x;
         sphere_col[1] = meshes[mi].col.y;
         sphere_col[2] = meshes[mi].col.z;
@@ -472,6 +496,11 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     }
 
     if (hit_type == 0) {
+        /* A ray leaving through the environment while inside an
+           absorbing medium travels an infinite distance: T(inf) = 0. */
+        if (med.ior > 1.0f &&
+            vol_sigma_nonzero(med.cr, med.cg, med.cb, med.att_dist))
+            return (V){0,0,0};
         float er, eg, eb;
         envmap_sample(env, d.x, d.y, d.z, &er, &eg, &eb);
         return (V){er, eg, eb};
@@ -699,12 +728,23 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V n_adj = entering ? n : mul(n, -1);
     cos_i = entering ? -cos_i : cos_i;
 
+    /* KHR_materials_volume: light that has traveled t_hit inside a
+       medium loses that segment's Beer-Lambert energy before any
+       downstream contribution; charged once per in-medium hit on both
+       the reflection and the refraction.  Tseg is exactly (1,1,1) when
+       there is no medium (or its attenuation is the default), leaving
+       these bakes byte-identical. */
+    V Tseg = (V){1.0f, 1.0f, 1.0f};
+    if (med.ior > 1.0f)
+        Tseg = vol_transmittance(t_hit, med.cr, med.cg, med.cb, med.att_dist);
     V refl_dir = sub(d, mul(n_adj, 2.0f * dot(d, n_adj)));
     V refl_origin = add(p, mul(refl_dir, EPS));
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,
                            spheres, num_spheres, meshes, num_meshes,
                            lights, num_lights, emissive, num_emissive,
-                           sample_idx, env, textures, num_textures);
+                           sample_idx, env, textures, num_textures,
+                           med);
+    refl_col = (V){refl_col.x * Tseg.x, refl_col.y * Tseg.y, refl_col.z * Tseg.z};
 
     if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
         /* Unified PBR mirror: reflection weighted per-channel by F0
@@ -715,21 +755,69 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     float reflectivity = sphere_ref;
     float ior = sphere_ior;
 
-    float n1 = entering ? 1.0f : ior;
-    float n2 = entering ? ior : 1.0f;
-    float eta = n1 / n2;
+    /* Hit normals are always flipped to face the ray, so at a mesh face
+       `entering` never fires and every legacy glass hit above used
+       air->...->air "exit" parameters.  At an *absorbing* volume's front
+       face the ray physically ENTERS (air->glass: eta = 1/ior, outward
+       normal); at the back face it EXITS (glass->air: eta = ior,
+       in-wall normal = the flipped one).  Anything else keeps the legacy
+       mistake unchanged (byte-identical control gate). */
+    V n_refr = n_adj;
+    float eta;
+    if (hit_type == 2 && meshes[mi].vol_th > 0.0f &&
+        vol_sigma_nonzero(meshes[mi].att_r, meshes[mi].att_g, meshes[mi].att_b,
+                          meshes[mi].att_dist)) {
+        if (side)
+            eta = 1.0f / ior;
+        else {
+            n_refr = n;
+            eta = ior;
+        }
+    } else {
+        float n1 = entering ? 1.0f : ior;
+        float n2 = entering ? ior : 1.0f;
+        eta = n1 / n2;
+    }
     float k = 1.0f - eta * eta * (1.0f - cos_i * cos_i);
+
+    /* Downstream medium for the refracted ray.  A volume boundary is a
+       closed (convex) shell and the hit normal is always flipped to face
+       the ray, so front/back detection uses the stored mesh normal: a
+       front-face crossing lands inside the volume (medium = this
+       material); a back-face crossing exits it (air).  KHR: the
+       thicknessFactor > 0 switch selects volumetric behavior. */
+    Medium refr_med = med;
+    if (hit_type == 2 && meshes[mi].vol_th > 0.0f) {
+        if (side)
+            refr_med = (Medium){sphere_ior, meshes[mi].att_r, meshes[mi].att_g,
+                                meshes[mi].att_b, meshes[mi].att_dist};
+        else
+            refr_med = med_air();
+    }
 
     V refr_col = {0, 0, 0};
     if (k > 0) {
         float cos_t = sqrtf(k);
-        V refr_dir = add(mul(d, eta), mul(n_adj, eta * cos_i - cos_t));
+        V refr_dir = add(mul(d, eta), mul(n_refr, eta * cos_i - cos_t));
+        /* Entering a *absorbing* volume: an origin offset along the
+           refracted direction leaves the ray glued to the entry seam,
+           where a neighbor triangle's back face produces a spurious
+           in-medium hit ~1e-4 in and falsely "exits" the medium before
+           the real chord is charged.  Push along the (flipped) normal
+           instead — straight into the volume.  Gated on sigma != 0 so
+           white/+inf (default) materials keep byte-identical renders. */
         V refr_origin = add(p, mul(refr_dir, EPS));
+        if (hit_type == 2 && side && meshes[mi].vol_th > 0.0f &&
+            vol_sigma_nonzero(meshes[mi].att_r, meshes[mi].att_g, meshes[mi].att_b,
+                              meshes[mi].att_dist))
+            refr_origin = add(refr_origin, mul(n_adj, EPS));
         refr_col = trace_ray(refr_origin, refr_dir, depth + 1,
                              spheres, num_spheres, meshes, num_meshes,
                              lights, num_lights, emissive, num_emissive,
-                             sample_idx, env, textures, num_textures);
+                             sample_idx, env, textures, num_textures,
+                             refr_med);
         refr_col = (V){refr_col.x * sc.x, refr_col.y * sc.y, refr_col.z * sc.z};
+        refr_col = (V){refr_col.x * Tseg.x, refr_col.y * Tseg.y, refr_col.z * Tseg.z};
     }
 
     float r0 = (1.0f - ior) / (1.0f + ior);
@@ -803,7 +891,8 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                                         ctx->lights, ctx->num_lights,
                                         ctx->emissive, ctx->num_emissive,
                                         sample_idx, ctx->env,
-                                        ctx->textures, ctx->num_textures);
+                                        ctx->textures, ctx->num_textures,
+                                        med_air());
                     color_sum = add(color_sum, color);
                     sample_count++;
                 }
@@ -862,6 +951,12 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].iri_ior = scene->meshes[i].iri_ior;
             meshes[i].iri_thin_min = scene->meshes[i].iri_thin_min;
             meshes[i].iri_thin_max = scene->meshes[i].iri_thin_max;
+            meshes[i].vol_th = scene->meshes[i].vol_th;
+            meshes[i].att_r = scene->meshes[i].att_r;
+            meshes[i].att_g = scene->meshes[i].att_g;
+            meshes[i].att_b = scene->meshes[i].att_b;
+            meshes[i].att_dist = scene->meshes[i].att_dist;
+            meshes[i].vol_tex_index = scene->meshes[i].vol_tex_index;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;
