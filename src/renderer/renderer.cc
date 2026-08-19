@@ -755,18 +755,26 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     float reflectivity = sphere_ref;
     float ior = sphere_ior;
 
-    /* Hit normals are always flipped to face the ray, so at a mesh face
-       `entering` never fires and every legacy glass hit above used
-       air->...->air "exit" parameters.  At an *absorbing* volume's front
-       face the ray physically ENTERS (air->glass: eta = 1/ior, outward
-       normal); at the back face it EXITS (glass->air: eta = ior,
-       in-wall normal = the flipped one).  Anything else keeps the legacy
-       mistake unchanged (byte-identical control gate). */
+    /* Hit geometry: on a mesh face the `entering` flag (cos_i < 0 of the
+       flipped normal) is ALWAYS true — the returned normal is flipped to
+       face the ray, so cos_i <= 0.  The legacy n1/n2 therefore read every
+       mesh crossing with eta = 1/ior: correct at the FRONT (air -> glass)
+       but wrong at the BACK (glass -> air), where physics wants
+       eta = ior.  With the wrong back eta the exit bends toward the normal
+       like an entry and reconverges inside the shell — the in-glass walk.
+       (There is no entry defect and no legacy TIR: eta < 1 everywhere
+       makes k < 0 impossible.)  The pre-flip stored-normal sign
+       (hit_mesh_bvh's side_out) is the true front/back test: front
+       eta = 1/ior, back eta = ior.  n_refr needs no side dependence: on the
+       mesh n_adj is the flipped normal itself, which is the correct
+       refraction normal for both crossings (the n_refr = n assignment in the
+       back case is bit-identical on that flag and is retained for the
+       measure-zero grazing case where entering could read false).  Sphere
+       normals are not pre-flipped, so their n1/n2 stays the genuine state
+       test and is untouched. */
     V n_refr = n_adj;
     float eta;
-    if (hit_type == 2 && meshes[mi].vol_th > 0.0f &&
-        vol_sigma_nonzero(meshes[mi].att_r, meshes[mi].att_g, meshes[mi].att_b,
-                          meshes[mi].att_dist)) {
+    if (hit_type == 2) {
         if (side)
             eta = 1.0f / ior;
         else {

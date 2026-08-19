@@ -917,22 +917,21 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 continue;
             }
 
-            /* Hit normals are always flipped to face the ray, so at a
-               mesh face `entering` never fires and every legacy glass
-               hit above used air->...->air "exit" parameters.  At an
-               *absorbing* volume's front face the ray physically ENTERS
-               (air->glass: eta = 1/ior, outward normal); at the back
-               face it EXITS (glass->air: eta = ior, in-wall normal =
-               the flipped one).  Anything else keeps the legacy mistake
-               unchanged (byte-identical control gate). */
+            /* Hit geometry (see the CPU twin): on a mesh face the
+               `entering` flag is ALWAYS true (the returned normal is
+               flipped to face the ray), so the legacy n1/n2 read every mesh
+               crossing with eta = 1/ior — correct at the front, wrong at
+               the back, where physics wants eta = ior.  The wrong back eta
+               bends the exit toward the normal like an entry and
+               reconverges inside the shell (the in-glass walk).  The
+               pre-flip stored-normal sign (side_entry) is the true
+               front/back test.  On the mesh na is the flipped normal
+               itself — the correct refraction normal for both crossings —
+               so n_refr keeps its value in all cases.  Spheres are
+               untouched (their n1/n2 is the genuine state test). */
             float3 n_refr = na;
             float eta;
-            int midmesh = tris[mi].mesh_idx;
-            if (hit_type == 2 && midmesh >= 0 && midmesh < nm &&
-                mats[midmesh].vol_th > 0.0f &&
-                vol_sigma_nonzero(float3(mats[midmesh].att_r, mats[midmesh].att_g,
-                                         mats[midmesh].att_b),
-                                  mats[midmesh].att_dist)) {
+            if (hit_type == 2) {
                 if (side_entry) {
                     eta = 1.0f / sior;
                 } else {
