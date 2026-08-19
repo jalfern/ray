@@ -337,19 +337,119 @@ machine on both backends, physical refraction for the volume faces).
    medium to air for one segment, re-set at the next boundary; the
    charge there is ~1 (T(0.0014) ≈ 0.99) — a ~1–2% slice per pass,
    not worth the per-mesh region plumbing it would take to eliminate.
-5. **Legacy refraction remains on the non-volume glass path**
-   (spheres are correct — their normals are not flipped; any mesh glass
-   without σ > 0 keeps the inverted-entry/exit bug as-is to preserve
-   the canonical baseline). Fixing it generally would move the 127,582
-   baseline and deserves its own phase with its own rebaseline.
-
-### Rebaseline note (no rebaseline occurred)
-Phase 3 added code but changed **zero** pixels on every existing scene
-(the σ ≠ 0 gate — see item 3/4 above); the current CPU/GPU baseline of
-record remains the Phase 2 one: **127,582 / 9,682,442 / max 80**,
-inside 110,453 / outside 17,129, inside share 86.57%. The absorption
-scene above is a new reference for its own new scene, not a rebaseline.
-
+ 5. **Legacy refraction remains on the non-volume glass path**
+    (spheres are correct — their normals are not flipped; any mesh glass
+    without σ > 0 keeps the bug as-is to preserve the canonical
+    baseline). Fixing it generally would move the 127,582 baseline and
+    deserves its own phase with its own rebaseline.
+    **RESOLVED in Phase 4:** the general fix (side-based eta on all
+    `hit_type == 2` faces, σ gate dropped) and the planned rebaseline
+    (127,582 → 126,899) both landed — see the Phase 4 section below.
+    Note the wording correction: there was no "inverted entry/exit" —
+    the defect is the wrong BACK-side eta only (see Phase 4 item 1).
+ 
+ ### Rebaseline note (no rebaseline occurred — until Phase 4)
+ Phase 3 added code but changed **zero** pixels on every existing scene
+ (the σ ≠ 0 gate — see item 3/4 above); at the time the CPU/GPU baseline
+ of record remained the Phase 2 one: **127,582 / 9,682,442 / max 80**,
+ inside 110,453 / outside 17,129, inside share 86.57%. The absorption
+ scene above is a new reference for its own new scene, not a rebaseline.
+ Phase 4 superseded that baseline: the general mesh-glass fix changes
+ exactly the canonical scene's class (non-absorbing mesh glass), so the
+ rebaseline was unavoidable — 126,899 / 7,811,679 / max 86, recorded in
+ "Rebaseline after Phase 4" in the Investigation Log.
+ 
+ ### Phase 4 — General mesh-glass refraction (back-side eta) — FIXED, rebaselined
+ **All items done** (general fix, physical verification, rebaseline +
+ evidence renders). J1/J2-approved plan: 6 evidence files, two commits
+ (① fix + gates + checks with NO baseline move — `0b51b79`; ② this one:
+ rebaseline + docs + evidence). Pass gate = G1 ∧ G2 byte-exact ∧ P2
+ 2D-model match; the AE count was corroboration in both directions.
+ The phase also corrected the mechanism wording of bd55bb1 (disclosed
+ in commit ①'s body; history not rewritten).
+ 
+ 1. DONE (item 1): **General fix (both backends).** The `hit_type == 2`
+    glass branch now always selects eta from the pre-flip stored-normal
+    sign (`side_out` CPU / `side_entry` GPU): front `1/ior`, back `ior`
+    — Phase 3's `vol_th > 0 && vol_sigma_nonzero` gate is dropped.
+    `n_refr` keeps Phase 3's side expression verbatim: on the mesh
+    `n_adj` is the flipped (ray-facing) normal itself — the correct
+    refraction normal for both crossings — so the expression is an
+    identity (bit-exact; that is what keeps G2 byte-identical with 0 JS
+    of extra risk). Spheres untouched: their normals are not
+    pre-flipped, so their `entering`/n1/n2 is a genuine state test.
+    Mechanism (final, audit-verified against the flip at
+    renderer.cc:207 / shaders.metal:691): on a mesh face `entering`
+    (cos_i < 0 of the flipped normal) is ALWAYS true; the legacy n1/n2
+    therefore reads eta = 1/ior at EVERY mesh crossing — correct at the
+    front (air→glass), wrong at the back (glass→air wants eta = ior).
+    With the wrong back eta the exit bends toward the normal like an
+    entry and the ray re-converges inside the shell: the in-glass walk
+    (reflected floor/wall content imaged onto the glass body; bright
+    interior reads wash-out-like). There was no entry defect and no
+    legacy TIR ring: with eta < 1 everywhere,
+    k = 1 − η²(1−cos²) < 0 is impossible — bd55bb1's "inverted entry
+    bending + spurious TIR ring" claims are false and are corrected
+    here.
+ 2. DONE (item 2): **Verification** (pre = Phase 3 HEAD 40f1ef5 binary
+    in a worktree, post = this fix; both backends; all gate renders from
+    in-tree scenes — scene files resolve the `gltf` key relative to
+    the scene file's directory, so temp scenes must live in
+    test_scenes/, never in /tmp):
+    - **G1** (no mesh transmission): byte-identical pre/post, both
+      backends — **20/20 PASS** (box, down, floor_only, lantern,
+      no_glass, no_sphere, self_shadow, suzanne, up, waterbottle).
+    - **G2** (absorption scene): **byte-identical** (CPU and GPU), as
+      predicted from identical expressions.
+    - **P1** (only_sphere, CPU, radial profile about the sphere center):
+      **no TIR rim in either state** — TIR is geometrically impossible
+      at the exits of a concentric spherical shell (internal ray
+      obliquity sin θ = sin α/1.6 < 1 always; grazing exit-only occurs
+      in parallel slabs), so the hypothesized rims were baseless in
+      both regimes. Measured: rimless, uniform mild brightening
+      +0.5–+1.5 ch across the sphere, +4.7 at center (the P4 washout
+      drop).
+    - **P2** (2D verification model — the pass gate: double shell in
+      the x = 0 slice, circles 0.09804/0.09390 about (0.1262, 0), ior
+      1.6, per-crossing Snell + TIR-drop, side from the pre-crossing
+      radius; verified crossings against hand-computed Snell ratios;
+      harnesses tools/ph4_p2.py + tools/ph4_p2gate.py; label =
+      no-glass render as the floor brightness function). The
+      PRE render follows the legacy-eta regime: off-axis columns
+      x ∈ {250, 280, 510} (rows ≈ 630–700): measured floor-shift
+      +84/+85/+89 px (corr 0.92–1.00) vs model legacy pred
+      +101/+73/+92 (error 3–17 px) and 143–152 px from the physical
+      pred — cross-regime rejection 10×–48×. The POST render moves to
+      a distinct, clean shifted pattern (corr ≥ 0.87), sign/magnitude
+      different from pre at 4 of 6 columns. Documented residual MODEL
+      inaccuracies (not fix failures): the deep bottom corner
+      (entry angle ≈ 37–42°, near the 38.7° exit-TIR threshold) — the
+      renderer nearly preserves the no-glass floor there (corr 1.00)
+      where the model predicts TIR-drop/upward; and ~2× edge-magnitude.
+    - **P3** (mesh_stats, re-measured; the inherited 28.7M figure came
+      from an older state and is discarded): one full frame on the
+      canonical scene — mesh[1] tests 1,060,548,021 → 1,241,391,322,
+      hits 207,337,685 → 209,783,147 (+1.2%). Near-flat is consistent
+      with surviving legitimate multiplicity: the bright hollow
+      interior keeps reflecting (body↔wall reflections each cost 2
+      mesh-1 hits; depth 8 allows several).
+    - **P4**: sphere-zone (y ≥ 517) mean channel brightness
+      83.246 → 81.695 (Δ −1.551; less washout).
+    - Canonical pre→post self-diff: CPU **102,593** px (13.05%, max
+      101); GPU **106,239** (13.51%, max 55).
+ 3. DONE (item 3): **Rebaseline (Investigation Log below, current
+    126,899 / 7,811,679 / max 86) + 6 evidence renders** under
+    images/reference/ (lamp pre/post × CPU+GPU, only_sphere pre/post ×
+    CPU — no_sphere remained a G1 gate scene, not evidence):
+    reflfix_before_lamp_cpu.png, reflfix_before_lamp_gpu.png,
+    reflfix_after_lamp_cpu.png, reflfix_after_lamp_gpu.png,
+    reflfix_before_onlysphere_cpu.png,
+    reflfix_after_onlysphere_cpu.png. Mask-regen note (J1): full vs
+    no-sphere changed-pixel region = 139,127 (pre) → 139,096 (post)
+    union (−31 px, −0.02%) — the canonical
+    test_scenes/lamp_glass_mask.ppm (147,504 px) stays valid and
+    unchanged.
+ 
 ### Medium Term
 - **Punctual lights (KHR_lights_punctual)** from glTF.
 - **Normal mapping** — not needed for IridescenceLamp (no `normalTexture` in
@@ -368,14 +468,18 @@ scene above is a new reference for its own new scene, not a rebaseline.
   `shaders.metal` uses iterative stack-based traversal. Surface diffuse terms now match,
   but transmitted/refracted light paths differ. Full parity requires unifying the
   traversal structure.
-- **Legacy glass refraction is wrong on mesh faces (pre-existing):** hit normals are
-  always flipped to face the ray, so the `entering` flag never fires on mesh glass and
-  every hit is shaded with air→air "exit" parameters — inverted entry bending
-  (TIR ring above sin θᵢ ≈ 1/ior), and the exit refracts the ray back into the glass
-  (the in-glass walk). Phase 3 corrected this *only* for absorbing-volume faces
-  (σ > 0) so the canonical 127,582 baseline stays untouched; general mesh-glass
-  refraction still carries the bug and will need its own phase + rebaseline
-  (spheres are unaffected — their normals are not pre-flipped).
+- ~~**Legacy glass refraction is wrong on mesh faces (pre-existing)**~~ —
+  **FIXED in Phase 4** (general mesh-glass rebaseline; see the Phase 4
+  section and "Rebaseline after Phase 4" in the Investigation Log).
+  Corrected mechanism (supersedes the Phase 3 record wording): on a mesh
+  face the `entering` flag is ALWAYS true — the hit normal is flipped to
+  face the ray before it is evaluated — so the legacy n1/n2 read every
+  mesh crossing with eta = 1/ior: correct at the front (air→glass), wrong
+  at the back (glass→air wants eta = ior), which bent the exit toward the
+  normal like an entry and re-converged the ray inside the shell (the
+  in-glass walk). There was no inverted-entry defect and no legacy TIR
+  ring: with eta < 1 everywhere, k = 1 − η²(1−cos²) < 0 is impossible.
+  Spheres were never affected (their normals are not pre-flipped).
 - **Scale-relative determinant threshold:** The fix `|det| < 1e-7 * mean(|e1|², |e2|²)`
   is a heuristic. Very small triangles with near-parallel rays could still produce false
   rejections. A more principled approach would normalize the determinant by edge lengths.
@@ -431,12 +535,14 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED — current: **127,582** differing px /
-sum_abs_err 9,682,442 / max channel err 80 (masked: inside 110,453 /
-9,626,805; outside 17,129 / 55,637) — post-Phase-2-item-3 iridescence
-(shaded renders with the thin-film model active). Superseded baseline:
-127,575 / 10,676,607 / max 80 (inside 110,398 / outside 17,177) —
-post-item-4 AO, commit 91bae3b.
+**Status:** BASELINE ESTABLISHED — current: **126,899** differing px /
+sum_abs_err 7,811,679 / max channel err 86 (masked: inside 109,764 /
+7,756,032; outside 17,135 / 55,647) — post-Phase-4 general mesh-glass
+refraction fix ("Rebaseline after Phase 4" below). Superseded baseline:
+127,582 / 9,682,442 / max 80 (inside 110,453 / 9,626,805; outside
+17,129 / 55,637) — post-Phase-2-item-3 iridescence; 127,575 /
+10,676,607 / max 80 (inside 110,398 / outside 17,177) — post-item-4 AO,
+commit 91bae3b.
 **Method:** `make`; render CPU (`./ray2 --cpu <scene>`) and GPU (`./ray2 <scene>`)
 with a copy of `test_scenes/scene_lamp.json` that omits the `"output"` key, so each
 writes its PPM to stdout (a `28T`/`GPU` prefix line precedes the PPM header — the
@@ -492,11 +598,36 @@ three.js chunks), so no new class of diverging pixels appeared; the same
 jittering pixels remain. The AE *magnitude* fell ~9%
 (10,676,607 → 9,682,442): replacing the raw F0-derived lobe/mirror
 weights with film-weighted ones changes the residual scale of the
-same glass-path traversal divergence (magnitude moves like the item-4
-AO case; the count is the parity signal). This is the current reference
-for future CPU/GPU parity work on this scene.
+ same glass-path traversal divergence (magnitude moves like the item-4
+ AO case; the count is the parity signal). Superseded as the current
+ baseline by the Phase 4 rebaseline below.
 
-**Item-4 decision — AO does NOT attenuate specular or the mirror.**
+ **Rebaseline after Phase 4 (general mesh-glass refraction fix) —
+ CURRENT BASELINE** — back-side eta correction on ALL `hit_type == 2`
+ glass faces (commit 0b51b79). Unlike Phase 3 (zero pixels by the σ
+ gate's design), the fix deliberately acts on the canonical scene's own
+ class — non-absorbing mesh glass (the IridescenceLamp globes) — so this
+ rebaseline was planned and unavoidable. Same canonical mask, same
+ method (stdout-PPM copies of scene_lamp.json). — **126,899** differing
+ pixels (16.14%), sum_abs_err 7,811,679, max channel err 86. Masked
+ split: inside 109,764 (74.41% of the 147,504-px mask) / 7,756,032;
+ outside 17,135 (2.68% of its 638,928 px) / 55,647; inside share
+ 86.50%. Tripwire check: the differing-pixel *count* moved only −683
+ (−0.54%) vs 127,582 and the inside/outside split is within ±0.5% — a
+ corrected glass path, not a new divergence class. The AE *magnitude*
+ fell ~20% (9,682,442 → 7,811,679): the mis-bent back-side exits and
+ their secondary in-glass re-illumination contributed a large part of
+ the residual spread (magnitude tracks brightness as in the item-4 /
+ Phase 2 cases; the count stays the parity signal). Corroboration,
+ recorded in the Phase 4 section: pre→post canonical self-diff CPU
+ 102,593 px (max 101) / GPU 106,239 (max 55); first mask-region
+ re-measurement (full vs no-sphere changed pixels) 139,127 pre →
+ 139,096 post (−0.02%) — canonical mask stays unchanged; new-baseline
+ masked mean channel delta vs no-glass: R +72.6 / G +64.8 / B +47.9.
+ This is the current reference for future CPU/GPU parity work on this
+ scene.
+
+ **Item-4 decision — AO does NOT attenuate specular or the mirror.**
 Baked AO (the ORM.R channel) is a hemispherical-occlusion estimate: it
 models how much of the local hemisphere is blocked, which is exactly what
 attenuates ambient/indirect light and (approximately) direct *diffuse*
@@ -658,10 +789,12 @@ separable from float noise out of two images.
 - **Issue 6 (Camera zenith/nadir singularity):** FIXED
 - **Glass traversal parity:** DOCUMENTED LIMITATION
 - **Glass sphere zero pixels (IridescenceLamp):** FIXED — scale-relative det threshold
-- **Mesh-glass refraction side params (inverted entry / exit reflected back
-  in-glass):** FIXED on absorbing-volume faces only (Phase 3 item 4, σ > 0
-  gate); the non-volume path still carries the legacy bug to hold the
-  canonical baseline — see "Known Limitations"
+- **Mesh-glass refraction side params:** FIXED generally (Phase 4:
+  side-based eta on all `hit_type == 2` faces, σ gate dropped —
+  0b51b79; rebaseline 127,582 → 126,899). Phase 3's σ > 0 gate was the
+  baseline-holding interim; the corrected mechanism (wrong BACK eta
+  only — no entry defect, no legacy TIR) is recorded in "Known Limitations"
+  and the Phase 4 section
 - **KHR_materials_volume absorption:** DONE (Phase 3, items 1–4; volcheck
   parity 8.965e-08; control gate byte-identical; absorption-scene reference
   recorded in the Phase 3 section)
