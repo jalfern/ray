@@ -66,6 +66,7 @@ typedef struct {
     Vec3 orbit_center;
     float orbit_radius;
     float orbit_height;
+    float orbit_bob;   /* vertical fly-over amplitude: 0 = fixed-height orbit */
 } AnimationConfig;
 
 typedef struct {

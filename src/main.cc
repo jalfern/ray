@@ -50,7 +50,8 @@ static void render_animation(Scene* scene) {
     for (int i = 0; i < total_frames; i++) {
         float angle = 2.0f * (float)M_PI * i / total_frames;
         scene->camera_pos.x = target.x + scene->animation.orbit_radius * cosf(angle);
-        scene->camera_pos.y = scene->animation.orbit_height;
+        scene->camera_pos.y = scene->animation.orbit_height
+                              + scene->animation.orbit_bob * cosf(angle);
         scene->camera_pos.z = target.z + scene->animation.orbit_radius * sinf(angle);
         scene->camera_target = target;
 

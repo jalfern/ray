@@ -555,6 +555,8 @@ Scene* parse_scene(const char* filename) {
                             p = parse_float(p, &scene->animation.orbit_radius);
                         } else if (strcmp(okey, "height") == 0) {
                             p = parse_float(p, &scene->animation.orbit_height);
+                        } else if (strcmp(okey, "bob") == 0) {
+                            p = parse_float(p, &scene->animation.orbit_bob);
                         } else {
                             while (*p && *p != ',' && *p != '}') p++;
                         }

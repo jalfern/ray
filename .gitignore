@@ -10,6 +10,9 @@ ray2
 # Output files
 *.ppm
 
+# Python
+__pycache__/
+
 # Generated assets
 frames/
 images/*
