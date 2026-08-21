@@ -965,19 +965,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 float3 refr_d = rd * eta + n_refr * (eta * cos_i - cos_t);
                 float3 refr_o = p + refr_d * EPS;
 
-                /* Entering an absorbing volume: push along the (flipped)
-                   normal as well — straight into the volume.  A
-                   direction-only offset leaves the ray glued to the entry
-                   seam, where a neighbor back face produces a spurious
-                   in-medium hit ~1e-4 in that falsely "exits" the medium
-                   before the real chord is charged.  Gated on sigma != 0
-                   so white/+inf materials stay byte-identical. */
+                /* Seam-hit avoidance for mesh-glass entry: an origin
+                   offset along the refracted direction alone leaves the
+                   ray glued to the entry seam, where a neighbor back face
+                   produces a spurious surface hit ~1e-4 in — for a volume
+                   this falsely "exits" the medium before the real chord is
+                   charged, and for plain glass it yields a spurious second
+                   refraction.  Push along the (flipped) normal instead —
+                   straight into the surface.  Universal for ALL mesh glass
+                   entry (not gated on absorption), matching the universal
+                   corrected eta/n_refr. */
                 int mside_mid = tris[mi].mesh_idx;
-                if (hit_type == 2 && side_entry && mside_mid >= 0 && mside_mid < nm &&
-                    mats[mside_mid].vol_th > 0.0f &&
-                    vol_sigma_nonzero(float3(mats[mside_mid].att_r, mats[mside_mid].att_g,
-                                             mats[mside_mid].att_b),
-                                      mats[mside_mid].att_dist))
+                if (hit_type == 2 && side_entry && mside_mid >= 0 && mside_mid < nm)
                     refr_o = refr_o + na * EPS;
 
                 float3 cur_thru = thru * Tseg;
@@ -986,7 +985,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                    boundary is a closed convex shell; crossing its front
                    face lands inside the volume (medium = this material),
                    crossing the back face exits it (air).  Otherwise the
-                   incoming medium carries through (homogeneous). */
+                   incoming medium carries through (homogeneous).
+                   INTENTIONALLY gated on vol_th > 0 — only volumes carry a
+                   medium; the corrected eta/n_refr and the origin push
+                   above apply to ALL mesh glass. */
                 float4 mid_rc = stk_md[stk];
                 float mid_dd = stk_ma[stk];
                 int mm = tris[mi].mesh_idx;

@@ -798,7 +798,10 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
        the ray, so front/back detection uses the stored mesh normal: a
        front-face crossing lands inside the volume (medium = this
        material); a back-face crossing exits it (air).  KHR: the
-       thicknessFactor > 0 switch selects volumetric behavior. */
+       thicknessFactor > 0 switch selects volumetric behavior — the medium
+       is INTENTIONALLY gated on vol_th > 0 (only volumes carry a medium;
+       the corrected eta/n_refr and the origin push above apply to ALL mesh
+       glass). */
     Medium refr_med = med;
     if (hit_type == 2 && meshes[mi].vol_th > 0.0f) {
         if (side)
@@ -812,17 +815,17 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     if (k > 0) {
         float cos_t = sqrtf(k);
         V refr_dir = add(mul(d, eta), mul(n_refr, eta * cos_i - cos_t));
-        /* Entering a *absorbing* volume: an origin offset along the
-           refracted direction leaves the ray glued to the entry seam,
-           where a neighbor triangle's back face produces a spurious
-           in-medium hit ~1e-4 in and falsely "exits" the medium before
-           the real chord is charged.  Push along the (flipped) normal
-           instead — straight into the volume.  Gated on sigma != 0 so
-           white/+inf (default) materials keep byte-identical renders. */
+        /* Seam-hit avoidance for mesh-glass entry: an origin offset along
+           the refracted direction alone leaves the ray glued to the entry
+           seam, where a neighbor triangle's back face produces a spurious
+           surface hit ~1e-4 in — for a volume this falsely "exits" the
+           medium before the real chord is charged, and for plain glass it
+           yields a spurious second refraction.  Push along the (flipped)
+           normal instead — straight into the surface.  Applies to ALL mesh
+           glass entry (universal; not gated on absorption), matching the
+           universal corrected eta/n_refr. */
         V refr_origin = add(p, mul(refr_dir, EPS));
-        if (hit_type == 2 && side && meshes[mi].vol_th > 0.0f &&
-            vol_sigma_nonzero(meshes[mi].att_r, meshes[mi].att_g, meshes[mi].att_b,
-                              meshes[mi].att_dist))
+        if (hit_type == 2 && side)
             refr_origin = add(refr_origin, mul(n_adj, EPS));
         refr_col = trace_ray(refr_origin, refr_dir, depth + 1,
                              spheres, num_spheres, meshes, num_meshes,
