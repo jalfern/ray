@@ -453,9 +453,14 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         V hit_n;
         float tmi;
         float uv[2];
+        int this_side = 1;
         if (meshes[i].num_bvh_nodes > 0 &&
-            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &m_side) && tmi < tm) {
+            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &this_side) && tmi < tm) {
             tm = tmi; mi = i; mn = hit_n; m_uv[0] = uv[0]; m_uv[1] = uv[1];
+            /* Capture `side` only for the WINNING mesh hit — hit_mesh_bvh
+               writes *side_out whenever this mesh has any hit, so without
+               this the last-processed mesh (not the nearest one) would win. */
+            m_side = this_side;
         }
     }
     int hm = (mi >= 0);
