@@ -612,9 +612,14 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
         float3 ro = stk_o[stk];
         float3 rd = stk_d[stk];
         float3 thru = stk_th[stk];
-        float4 mid_c = stk_md[stk];
+        float4 mid_c = stk_md[stk];   /* (ior, cr, cg, cb) — air is float4(1,1,1,1) */
         float mid_d = stk_ma[stk];
         int dp0 = stk_dp[stk];
+        /* "In a medium" is discriminated by ior > 1 (CPU twin: Medium.ior).
+           Air is stored as ior 1.0.  This assumes a transmitting volume
+           always has ior > 1 (KHR guarantees it in practice); a volume with
+           ior <= 1 would be silently treated as air.  Keep this float4
+           packing in lockstep with the CPU Medium struct. */
         bool in_med = mid_c.x > 1.0f;
 
         for (int depth = dp0; depth <= MAX_DEPTH; depth++) {

@@ -26,7 +26,15 @@ static int g_hit_tri_hits[256] = {0};
 /* KHR_materials_volume: the absorbing medium a ray currently travels
    through.  ior 1.0 = air.  Single-slot model — the glass path already
    hardcodes the outside medium as air, so only one medium is tracked
-   at a time (nested volumes are not resolved). */
+   at a time (nested volumes are not resolved).
+
+   "In a medium" is DISCRIMINATED BY ior > 1 (the GPU twin in shaders.metal
+   tests its packed mid_c.x > 1.0f).  This assumes a transmitting volume
+   always has ior > 1, which the KHR_materials_volume spec effectively
+   guarantees — but it is a latent coupling: a volume with ior <= 1 would
+   be silently treated as air (no absorption, no black-on-escape).  Keep the
+   CPU Medium layout and the GPU float4(stk_md) packing in lockstep; see
+   nextsteps.md "Known Limitations" for the tracked note. */
 typedef struct {
     float ior;
     float cr, cg, cb;    /* attenuationColor, linear RGB */

@@ -101,11 +101,11 @@ python3 tools/ppm_diff.py /tmp/lamp_cpu.ppm /tmp/lamp_gpu.ppm \
 both renders write raw PPM to stdout (a `28T`/`GPU` prefix line precedes the
 PPM header; the diff tool scans for `P6\n`). Both backends are
 byte-deterministic, so the counts are exact, not a noise level. Current
-baseline (768×1024, post-Phase-4 general mesh-glass refraction fix):
-**126,899** differing pixels (16.14%), sum_abs_err 7,811,679, max channel
-err 86 — masked: inside 109,764 / outside 17,135, inside share 86.50%
-(previous: 127,582 / 9,682,442 / 80, inside 110,453 / outside 17,129 —
-rebaseline history in nextsteps.md).
+baseline (768×1024, post-review-bug-fix CPU side binding + universal origin
+push): **126,677** differing pixels (16.11%), sum_abs_err 8,149,177, max
+channel err 86 — masked: inside 109,548 / outside 17,129, inside share
+86.48% (previous: 126,899 / 7,811,679 / 86, inside 109,764 / outside
+17,135 — post-Phase-4; rebaseline history in nextsteps.md).
 
 ## Next Steps
 

@@ -437,8 +437,9 @@ machine on both backends, physical refraction for the volume faces).
       83.246 → 81.695 (Δ −1.551; less washout).
     - Canonical pre→post self-diff: CPU **102,593** px (13.05%, max
       101); GPU **106,239** (13.51%, max 55).
- 3. DONE (item 3): **Rebaseline (Investigation Log below, current
-    126,899 / 7,811,679 / max 86) + 6 evidence renders** under
+  3. DONE (item 3): **Rebaseline (Investigation Log below, current
+     126,899 / 7,811,679 / max 86; superseded by the review-bug-fix
+     rebaseline 126,677 / 8,149,177 / max 86) + 6 evidence renders** under
     images/reference/ (lamp pre/post × CPU+GPU, only_sphere pre/post ×
     CPU — no_sphere remained a G1 gate scene, not evidence):
     reflfix_before_lamp_cpu.png, reflfix_before_lamp_gpu.png,
@@ -483,6 +484,22 @@ machine on both backends, physical refraction for the volume faces).
 - **Scale-relative determinant threshold:** The fix `|det| < 1e-7 * mean(|e1|², |e2|²)`
   is a heuristic. Very small triangles with near-parallel rays could still produce false
   rejections. A more principled approach would normalize the determinant by edge lengths.
+- **Volume medium "in-medium" discriminator is ior > 1 (latent coupling):** both
+  backends decide whether a ray travels in a transmitting medium by `ior > 1`
+  (CPU `Medium.ior`; GPU the packed `stk_md` float4 `.x`). A KHR_materials_volume
+  medium with `ior <= 1` would be silently treated as air (no Beer-Lambert
+  absorption, no black-on-environment-escape). The spec effectively guarantees
+  ior > 1 for transmitting volumes, so impact is nil for current assets, but the
+  CPU `Medium` struct and the GPU `float4(stk_md)` + `stk_ma` packing must stay in
+  lockstep (see the fix-record commit for the added comments). (Bug 2, option A —
+  documented, no behavior change.)
+- **Refraction-origin seam push is universal, downstream medium is volume-gated
+  (intentional asymmetry):** after the Phase 4 fix the corrected eta/n_refr and the
+  entry-seam origin push apply to ALL mesh glass (`hit_type == 2 && side`), while
+  the downstream-medium assignment is intentionally gated on `vol_th > 0` (only
+  volumes carry a medium). For current assets (all mesh glass is volume glass) the
+  universal origin push changes nothing; it is a latent correction for any future
+  non-volume mesh glass. (Bug 3 — implemented, zero current-scene behavior change.)
 
 ## Investigation Log
 
@@ -535,14 +552,16 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED — current: **126,899** differing px /
-sum_abs_err 7,811,679 / max channel err 86 (masked: inside 109,764 /
-7,756,032; outside 17,135 / 55,647) — post-Phase-4 general mesh-glass
-refraction fix ("Rebaseline after Phase 4" below). Superseded baseline:
-127,582 / 9,682,442 / max 80 (inside 110,453 / 9,626,805; outside
-17,129 / 55,637) — post-Phase-2-item-3 iridescence; 127,575 /
-10,676,607 / max 80 (inside 110,398 / outside 17,177) — post-item-4 AO,
-commit 91bae3b.
+**Status:** BASELINE ESTABLISHED — current: **126,677** differing px /
+sum_abs_err 8,149,177 / max channel err 86 (masked: inside 109,548 /
+8,093,533; outside 17,129 / 55,644) — post-review-bug-fix CPU side
+binding + universal origin push ("Rebaseline after the review-bug
+fixes" below). Superseded baseline: 126,899 / 7,811,679 / max 86 (inside
+109,764 / 7,756,032; outside 17,135 / 55,647) — post-Phase-4 general
+mesh-glass refraction fix; 127,582 / 9,682,442 / max 80 (inside
+110,453 / 9,626,805; outside 17,129 / 55,637) — post-Phase-2-item-3
+iridescence; 127,575 / 10,676,607 / max 80 (inside 110,398 / outside
+17,177) — post-item-4 AO, commit 91bae3b.
 **Method:** `make`; render CPU (`./ray2 --cpu <scene>`) and GPU (`./ray2 <scene>`)
 with a copy of `test_scenes/scene_lamp.json` that omits the `"output"` key, so each
 writes its PPM to stdout (a `28T`/`GPU` prefix line precedes the PPM header — the
@@ -626,6 +645,30 @@ weights with film-weighted ones changes the residual scale of the
  masked mean channel delta vs no-glass: R +72.6 / G +64.8 / B +47.9.
  This is the current reference for future CPU/GPU parity work on this
  scene.
+
+ **Rebaseline after the review-bug fixes (CPU side binding + universal
+ origin push) — CURRENT BASELINE** — commit (bug 1): the CPU `trace_ray`
+ now captures the shell `side` only for the *winning* mesh hit (previously
+ `hit_mesh_bvh` wrote `*side_out` for every mesh with any hit, so `m_side`
+ reflected the last-processed mesh, not the nearest `mi` — a CPU/GPU
+ divergence; GPU already bound `side_entry` to `tris[mi]`). Commit (bug 3):
+ the mesh-glass entry seam origin push became universal (`hit_type == 2 &&
+ side`), dropping the `vol_th && sigma` gate (no effect on current scenes —
+ all mesh glass is volume glass; latent fix for future non-volume glass).
+ Same canonical mask, same method. — **126,677** differing pixels
+ (16.11%), sum_abs_err 8,149,177, max channel err 86. Masked split:
+ inside 109,548 (74.27% of the 147,504-px mask) / 8,093,533; outside
+ 17,129 (2.68% of its 638,928 px) / 55,644; inside share 86.48%.
+ Tripwire check: the differing-pixel *count* fell −222 (−0.17%) vs
+ 126,899 and the spatial split is unchanged (±0.02% inside share) — bug
+ 1 removed a CPU-side divergence source, not a new class. The AE
+ *magnitude* rose ~4% (7,811,679 → 8,149,177): binding CPU `side` to the
+ winning mesh changes *which* glass traversals the recursive CPU reports
+ vs the iterative GPU, shifting magnitude into a subset of already-diverging
+ pixels while shrinking the total count. Non-glass scenes verified
+ byte-identical pre/post (`scene_floor_only`, `scene_lamp_only_sphere`,
+ `scene_box`). This is the current reference for future CPU/GPU parity
+ work on this scene.
 
  **Item-4 decision — AO does NOT attenuate specular or the mirror.**
 Baked AO (the ORM.R channel) is a hemispherical-occlusion estimate: it
@@ -795,6 +838,18 @@ separable from float noise out of two images.
   baseline-holding interim; the corrected mechanism (wrong BACK eta
   only — no entry defect, no legacy TIR) is recorded in "Known Limitations"
   and the Phase 4 section
+- **CPU `side` bound to non-winning mesh hit:** FIXED (review bug 1) — CPU
+  `trace_ray` now captures the shell `side` only for the *winning* mesh hit
+  (`hit_mesh_bvh` wrote `*side_out` for every mesh with any hit, so `m_side`
+  reflected the last-processed mesh, not the nearest `mi`; GPU already bound
+  `side_entry` to `tris[mi]`). Rebaseline 126,899 → 126,677 (see "Rebaseline
+  after the review-bug fixes").
+- **Mesh-glass entry seam push non-universal:** FIXED (review bug 3) — the
+  refraction-origin seam push is now universal (`hit_type == 2 && side`,
+  σ/vol_th gate dropped); zero current-scene effect (all mesh glass is volume
+  glass); latent correction for non-volume mesh glass.
+- **Volume medium ior > 1 discriminator:** DOCUMENTED LIMITATION (review
+  bug 2, option A) — see "Known Limitations"; no behavior change.
 - **KHR_materials_volume absorption:** DONE (Phase 3, items 1–4; volcheck
   parity 8.965e-08; control gate byte-identical; absorption-scene reference
   recorded in the Phase 3 section)
