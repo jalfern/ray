@@ -669,6 +669,16 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         f0mix = add(mul(f0, 1.0f - film_w), mul(film_f0, film_w));
     }
 
+    /* KHR_materials_transmission: three.js replaces the diffuse with the
+       transmitted light (totalDiffuse = mix(totalDiffuse, transmitted,
+       material.transmission)).  Scale every diffuse contribution (direct,
+       ambient, emissive) by (1 - transmission); the specular lobe and the
+       mirror are untouched.  JSON glass spheres carry no transmission
+       factor (0) and are unchanged. */
+    float glass_trans = (mat == MAT_GLASS && hit_type == 2)
+        ? fminf(1.0f, fmaxf(0.0f, meshes[mi].transmission))
+        : 0.0f;
+
     V lit = {0, 0, 0};
     for (int li = 0; li < num_lights; li++) {
         V light_pos = lights[li].pos;
@@ -699,7 +709,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             /* Specular weight takes the film response per channel when present. */
             V glw = mul(sc, spec_str);
             if (film_w > 0.0f) glw = add(mul(glw, 1.0f - film_w), mul(film, film_w));
-            lit = add(lit, add(mul(sc, diff * lf * sphere_ao), mul(glw, spec * lf)));
+            lit = add(lit, add(mul(sc, diff * lf * sphere_ao * (1.0f - glass_trans)), mul(glw, spec * lf)));
         } else {
             /* Merged plastic+metallic PBR: diffuse * (1-metallic) * AO, specular F0. */
             lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(f0mix, spec * spec_str * lf)));
@@ -740,12 +750,12 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (vis) {
             V le = emissive[ei].emitted;
             V em_contrib = mul(le, G / pdf);
-            V emd = mul(sc, kd * sphere_ao);
+            V emd = mul(sc, kd * sphere_ao * (1.0f - glass_trans));
             lit = add(lit, (V){emd.x * em_contrib.x, emd.y * em_contrib.y, emd.z * em_contrib.z});
         }
     }
 
-    V ambient = mul(sc, 0.15f * sphere_ao);
+    V ambient = mul(sc, 0.15f * sphere_ao * (1.0f - glass_trans));
     V base_color = add(ambient, lit);
     /* Surface light leaving an in-medium hit must travel the already
        traversed segment back through the medium to the camera. */
@@ -976,6 +986,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].ior = scene->meshes[i].ior;
             meshes[i].roughness = scene->meshes[i].roughness;
             meshes[i].metallic = scene->meshes[i].metallic;
+            meshes[i].transmission = scene->meshes[i].transmission;
             meshes[i].tex_index = scene->meshes[i].tex_index;
             meshes[i].orm_tex_index = scene->meshes[i].orm_tex_index;
             meshes[i].iri_tex_index = scene->meshes[i].iri_tex_index;

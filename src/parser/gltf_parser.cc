@@ -1619,6 +1619,7 @@ static void build_gltf_scene(
                 mo->att_g = att_g;
                 mo->att_b = att_b;
                 mo->att_dist = att_dist;
+                mo->transmission = transmission;
 
                 /* Debug: print final material props */
                 if (g_gltf_debug_enabled) {

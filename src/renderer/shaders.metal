@@ -331,6 +331,7 @@ struct MeshMat {
     float ior;
     float roughness;
     float metallic;
+    float transmission;
     int mat_type;
     int tex_type;
     float tex_scale;
@@ -665,7 +666,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             float3 hit_n;
             float3 sc_col = float3(1.0f);
             float sref = 0, sior = 1.5f, srough = 1.0f;
-            float smetal = 0.0f, sao = 1.0f;
+            float smetal = 0.0f, sao = 1.0f, strans = 0.0f;
             int smat = 0;
 
             if (hs && (!hf0 || ts < tf) && (!hm || ts < tm)) {
@@ -685,6 +686,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     sior = mats[mesh_idx].ior;
                     srough = mats[mesh_idx].roughness;
                     smetal = mats[mesh_idx].metallic;
+                    strans = mats[mesh_idx].transmission;
                     smat = mats[mesh_idx].mat_type;
                 }
 
@@ -838,6 +840,14 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                  film = filmv;
              }
 
+              /* KHR_materials_transmission: three.js replaces the diffuse
+                 with the transmitted light; scale every diffuse contribution
+                 (direct, ambient, emissive) by (1 - transmission).  The
+                 specular lobe and the mirror are untouched.  Spheres carry
+                 no transmission factor (0) and are unchanged. */
+              float glass_trans = (mat == MAT_GLASS && hit_type == 2)
+                  ? min(1.0f, max(0.0f, strans)) : 0.0f;
+
              float3 lit = float3(0.0f);
             for (int li = 0; li < nl; li++) {
                 float3 ld = normalize(lights[li].pos - p);
@@ -865,7 +875,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     /* Specular weight takes the film response per channel when present. */
                     float3 glw = sc_col * ss;
                     if (film_w > 0.0f) glw = glw * (1.0f - film_w) + film * film_w;
-                    lit += sc_col * diff * lf * sao + glw * sp * lf;
+                    lit += sc_col * diff * lf * sao * (1.0f - glass_trans) + glw * sp * lf;
                 } else {
                     lit += (sc_col * kd) * diff * lf * sao + f0u * sp * ss * lf;
                 }
@@ -900,11 +910,11 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sph,
                                                   tris, tc, bvh, nb, skip_mesh);
                 if (vis) {
-                    float3 emd = sc_col * (kd * sao);
+                    float3 emd = sc_col * (kd * sao * (1.0f - glass_trans));
                     lit += emd * emissive[ei].emitted * (G / pdf);
                 }
             }
-            float3 amb = sc_col * (0.15f * sao);
+            float3 amb = sc_col * (0.15f * sao * (1.0f - glass_trans));
             float3 base = amb + lit;
             /* Surface light leaving an in-medium hit must travel the
                already traversed segment back through the medium. */

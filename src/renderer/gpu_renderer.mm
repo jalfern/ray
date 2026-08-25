@@ -102,6 +102,7 @@ typedef struct {
     float ior;
     float roughness;
     float metallic;
+    float transmission;
     int mat_type;
     int tex_type;
     float tex_scale;
@@ -126,7 +127,7 @@ static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.meta
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
 static_assert(sizeof(SceneGpu) == 52, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 104, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 108, "MeshMatGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
 static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -297,8 +298,9 @@ Image* render_frame_gpu(const Scene* scene) {
                   mats[m].col[0] = mo->color.x; mats[m].col[1] = mo->color.y; mats[m].col[2] = mo->color.z;
                    mats[m].ref = mo->reflectivity;
                    mats[m].ior = mo->ior;
-                   mats[m].roughness = mo->roughness;
-                   mats[m].metallic = mo->metallic;
+                    mats[m].roughness = mo->roughness;
+                    mats[m].metallic = mo->metallic;
+                    mats[m].transmission = mo->transmission;
                   mats[m].tex_index = mo->tex_index;
                   mats[m].orm_tex_index = mo->orm_tex_index;
                   mats[m].iri_tex_index = mo->iri_tex_index;

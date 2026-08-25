@@ -1,0 +1,1 @@
+{"camera": {"pos": [0, 0, 5], "target": [0, 0, 0]}, "gltf": "Suzanne.gltf", "lights": [{"pos": [5, 10, 5], "size": 4}], "floor": {"checkerboard": true}, "width": 800, "height": 600}

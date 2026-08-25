@@ -35,6 +35,7 @@ typedef struct {
     float ior;
     float roughness;
     float metallic;
+    float transmission;
     Vec3 color;
     char material[16];
     int tex_type;

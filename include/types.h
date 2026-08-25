@@ -45,6 +45,7 @@ typedef struct {
     float ior;
     float roughness;
     float metallic;
+    float transmission;
     int mat_type;
     int tex_index;
     int orm_tex_index;

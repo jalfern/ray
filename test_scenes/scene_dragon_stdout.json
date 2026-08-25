@@ -52,7 +52,6 @@
     "file": "envmaps/polyhaven_haven_01_1k.hdr",
     "intensity": 7.0
   },
-  "output": "images/dragon_attenuation.png",
   "width": 1024,
   "height": 768
 }
