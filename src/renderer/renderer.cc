@@ -444,7 +444,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                    EmissiveSurf* emissive, int num_emissive,
                    int sample_idx, EnvMap* env,
                    ImageTexture* textures, int num_textures,
-                   Medium med) {
+                    Medium med) {
     if (depth > MAX_DEPTH) return (V){0,0,0};
 
     float ts, tf;
@@ -521,6 +521,20 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
 
     V p = add(o, mul(d, t_hit));
 
+    /* KHR_materials_volume: the segment from the previous surface to this
+       hit was already traveled inside the current medium.  Every
+       contribution leaving this surface back toward the camera — the
+       surface light (ambient + lit) and the downstream reflection and
+       refraction — must carry that segment's Beer-Lambert loss.  Charging
+       it here (in addition to the downstream bakes) is what tints light
+       arriving at an in-medium surface (e.g. the far wall of a solid glass
+       body): that light must exit the medium to reach the camera.
+       Tseg is exactly (1,1,1) without an absorbing medium, keeping
+       non-absorbing renders byte-identical. */
+    V Tseg = (V){1.0f, 1.0f, 1.0f};
+    if (med.ior > 1.0f)
+        Tseg = vol_transmittance(t_hit, med.cr, med.cg, med.cb, med.att_dist);
+
     if (hit_type == 3) {
         V n_floor = (V){0, 1, 0};
         V base = floor_color(p);
@@ -566,7 +580,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                 lit = add(lit, (V){base.x * em_contrib.x, base.y * em_contrib.y, base.z * em_contrib.z});
             }
         }
-        return lit;
+        return (V){lit.x * Tseg.x, lit.y * Tseg.y, lit.z * Tseg.z};
     }
 
     V n = hit_n;
@@ -612,7 +626,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
-    if (mat == MAT_EMISSIVE) return sc;
+    if (mat == MAT_EMISSIVE) return (V){sc.x * Tseg.x, sc.y * Tseg.y, sc.z * Tseg.z};
 
     /* Merged plastic+metallic PBR params (per pixel):
        kd = 1 - metallic, F0 = mix(0.04, basecolor, metallic).
@@ -733,6 +747,9 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
 
     V ambient = mul(sc, 0.15f * sphere_ao);
     V base_color = add(ambient, lit);
+    /* Surface light leaving an in-medium hit must travel the already
+       traversed segment back through the medium to the camera. */
+    base_color = (V){base_color.x * Tseg.x, base_color.y * Tseg.y, base_color.z * Tseg.z};
 
     if (mat == MAT_SUBSURFACE) return base_color;
 
@@ -741,15 +758,6 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V n_adj = entering ? n : mul(n, -1);
     cos_i = entering ? -cos_i : cos_i;
 
-    /* KHR_materials_volume: light that has traveled t_hit inside a
-       medium loses that segment's Beer-Lambert energy before any
-       downstream contribution; charged once per in-medium hit on both
-       the reflection and the refraction.  Tseg is exactly (1,1,1) when
-       there is no medium (or its attenuation is the default), leaving
-       these bakes byte-identical. */
-    V Tseg = (V){1.0f, 1.0f, 1.0f};
-    if (med.ior > 1.0f)
-        Tseg = vol_transmittance(t_hit, med.cr, med.cg, med.cb, med.att_dist);
     V refl_dir = sub(d, mul(n_adj, 2.0f * dot(d, n_adj)));
     V refl_origin = add(p, mul(refl_dir, EPS));
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,

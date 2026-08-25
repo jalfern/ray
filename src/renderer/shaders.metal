@@ -710,6 +710,20 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
 
             float3 p = ro + rd * t_hit;
 
+            /* KHR_materials_volume: the segment from the previous surface
+               to this hit was already traveled inside the current medium.
+               Every contribution leaving this surface back toward the
+               camera — the surface light (ambient + lit) and the downstream
+               reflection and refraction — must carry that segment's
+               Beer-Lambert loss.  Charging it here (in addition to the
+               downstream bakes) is what tints light arriving at an
+               in-medium surface (e.g. the far wall of a solid glass body):
+               that light must exit the medium to reach the camera.
+               Exactly (1,1,1) without an absorbing medium. */
+            float3 Tseg = float3(1.0f);
+            if (in_med)
+                Tseg = vol_transmittance(t_hit, float3(mid_c.y, mid_c.z, mid_c.w), mid_d);
+
             if (hit_type == 3) {
                 float3 nf = float3(0, 1, 0);
                 float3 fl = floor_color(p);
@@ -751,7 +765,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         lit += fl * emissive[ei].emitted * (G / pdf);
                     }
                 }
-                accum += lit * thru;
+                accum += lit * (thru * Tseg);
                 break;
             }
 
@@ -781,7 +795,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             }
 
             if (mat == MAT_EMISSIVE) {
-                accum += sc_col * thru;
+                accum += sc_col * (thru * Tseg);
                 break;
             }
 
@@ -892,7 +906,9 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             }
             float3 amb = sc_col * (0.15f * sao);
             float3 base = amb + lit;
-            accum += base * thru;
+            /* Surface light leaving an in-medium hit must travel the
+               already traversed segment back through the medium. */
+            accum += base * (thru * Tseg);
 
             if (depth == MAX_DEPTH) break;
 
@@ -900,14 +916,6 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             bool entering = cos_i < 0;
             float3 na = entering ? n_hit : -n_hit;
             cos_i = entering ? -cos_i : cos_i;
-
-            /* KHR_materials_volume: charge the t_hit segment traveled in
-               the current medium to every downstream photon contribution.
-               Exactly (1,1,1) without a medium (or with default
-               attenuation) — leaves renders byte-identical. */
-            float3 Tseg = float3(1.0f);
-            if (in_med)
-                Tseg = vol_transmittance(t_hit, float3(mid_c.y, mid_c.z, mid_c.w), mid_d);
 
             float3 refl_d = reflect(rd, na);
             float3 refl_o = p + refl_d * EPS;

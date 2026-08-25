@@ -1686,7 +1686,15 @@ static void build_gltf_scene(
                         }
                     }
                 }
-                if (mo->tex_type == 0 && mo->tex_index < 0) {
+                /* Procedural checker fallback is for UV verification on
+                   OPAQUE (plastic/metallic) meshes only.  Glass/transmission
+                   and emissive materials use their baseColorFactor (mo->color);
+                   forcing a checker here would paint the glass with a white/
+                   checker pattern instead of the (possibly volume-attenuated)
+                   transparent color. */
+                if (mo->tex_type == 0 && mo->tex_index < 0 &&
+                    strcmp(mo->material, "glass") != 0 &&
+                    strcmp(mo->material, "emissive") != 0) {
                     mo->tex_type = 1;
                     mo->tex_scale = 8.0f;
                 }
