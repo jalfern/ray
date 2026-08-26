@@ -46,8 +46,21 @@ static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, const char* e
     id<MTLTexture> tex = [device newTextureWithDescriptor:td];
     if (!tex) { envmap_free(env); return nil; }
 
+    /* env->data is packed RGB; the texture is RGBA32Float.  Convert and
+       upload with a matching bytesPerRow (a 3-float row on a 4-float
+       texture trips the driver's bytes_per_row assertion and yields a
+       black texture). */
+    size_t row_bytes = env->w * 4 * sizeof(float);
+    float* rgba = (float*)malloc(row_bytes * env->h);
+    for (int i = 0; i < env->w * env->h; i++) {
+        rgba[i * 4 + 0] = env->data[i * 3 + 0];
+        rgba[i * 4 + 1] = env->data[i * 3 + 1];
+        rgba[i * 4 + 2] = env->data[i * 3 + 2];
+        rgba[i * 4 + 3] = 1.0f;
+    }
     [tex replaceRegion:MTLRegionMake2D(0, 0, env->w, env->h) mipmapLevel:0
-              withBytes:env->data bytesPerRow:env->w * 3 * sizeof(float)];
+              withBytes:rgba bytesPerRow:row_bytes];
+    free(rgba);
 
     envmap_free(env);
     return tex;

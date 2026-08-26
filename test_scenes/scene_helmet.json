@@ -1,0 +1,49 @@
+{
+  "camera": {
+    "pos": [
+      0,
+      2.3,
+      5.0
+    ],
+    "target": [
+      0,
+      2.55,
+      0
+    ],
+    "fov_y": 30
+  },
+  "gltf": "DamagedHelmet/DamagedHelmet_noglow.gltf",
+  "lights": [
+    {
+      "pos": [
+        -2,
+        3,
+        2.5
+      ],
+      "size": 2.0
+    },
+    {
+      "pos": [
+        2.5,
+        2.2,
+        -2
+      ],
+      "size": 2.0
+    },
+    {
+      "pos": [
+        0,
+        1.5,
+        3
+      ],
+      "size": 1.0
+    }
+  ],
+  "environment": {
+    "file": "envmaps/studio_dark.hdr",
+    "intensity": 2.5
+  },
+  "output": "images/helmet_render.png",
+  "width": 1024,
+  "height": 768
+}
