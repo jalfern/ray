@@ -1,6 +1,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+/* Upper bound on scene textures bound as an argument-buffer texture array.
+   The CPU samples textures[per-material index] freely; the GPU mirrors that
+   by binding every scene texture and indexing this array by the same index. */
+#define MAXTEX 64
+
 constant float EPS = 1e-4f;
 constant int AA_SAMPLES = 16;
 constant int MAX_DEPTH = 4;
@@ -16,6 +21,14 @@ constant int TEX_CHECKER = 1;
 constant int TEX_POLKA = 2;
 constant int TEX_MARBLE = 3;
 constant int TEX_RINGS = 4;
+
+/* Argument-buffer bundle of every scene texture.  Metal allows dynamic
+   indexing only through an array that lives in an argument buffer (a struct
+   passed by device reference), so the CPU's textures[per-material index]
+   sampling is mirrored by bundling all textures and indexing .t[idx]. */
+struct TexBundle {
+    array<texture2d<float>, MAXTEX> t;
+};
 
 struct SphereGpu {
     packed_float3 c;
@@ -56,7 +69,16 @@ struct SceneGpu {
     int has_env;
     float fov_scale;
     int num_textures;
+    int has_floor;
+    int has_bg_color;
+    float bg_r;
+    float bg_g;
+    float bg_b;
+    float sh[12];   /* Phase 2 IBL diffuse SH: [3][4] {c00,c1x,c1y,c1z} per channel */
+    int env_mips;   /* mip-chain length of env_tex (0 = no env) */
 };
+
+static_assert(sizeof(SceneGpu) == 124, "SceneGpu size must match gpu_renderer.mm");
 
 struct EmissiveGpu {
     packed_float3 emitted;
@@ -171,6 +193,44 @@ static float3 sample_envmap(texture2d<float> env_tex, float3 d) {
     float u = atan2(d.z, d.x) * (0.5f / M_PI_F) + 0.5f;
     float v = acos(clamp(d.y, -1.0f, 1.0f)) * (1.0f / M_PI_F);
     return env_tex.sample(sampler(filter::linear, address::repeat), float2(u, v)).rgb;
+}
+
+/* Phase 2 IBL: the env blurred by a surface's roughness, for a
+   specular/refracted ray escaping to the environment.  roughness in
+   [0,1] maps onto the mip chain the CPU built in envmap.cc
+   (roughness * maxLevelOfDetail); linear-mip-linear between the
+   bracketing levels, bilinear within a level — the same algorithm as
+   the CPU's envmap_sample_prefiltered (mip levels were uploaded from
+   the CPU-built chain, so only the within-level bilinear differs:
+   hardware vs manual, the pre-existing env-path parity class). */
+static float3 sample_env_prefiltered(texture2d<float> env_tex, float3 d, float rough,
+                                     int env_mips) {
+    float u = atan2(d.z, d.x) * (0.5f / M_PI_F) + 0.5f;
+    float v = acos(clamp(d.y, -1.0f, 1.0f)) * (1.0f / M_PI_F);
+    int maxlod = env_mips - 1;   /* must match the CPU's env->num_mips - 1 */
+    float lod = clamp(rough, 0.0f, 1.0f) * (float)maxlod;
+    int l0 = (int)floor(lod);
+    if (l0 > maxlod) l0 = maxlod;
+    float f = lod - (float)l0;
+    int l1 = min(l0 + 1, maxlod);
+    sampler smp(filter::linear, address::repeat);
+    float4 c0 = env_tex.sample(smp, float2(u, v), l0);
+    float4 c1 = env_tex.sample(smp, float2(u, v), l1);
+    return c0.rgb + (c1.rgb - c0.rgb) * f;
+}
+
+/* Phase 2 IBL: band-0..1 SH diffuse irradiance, the closed-form
+   hemispherical integral  E(N) = sqrt(pi)*c00 + sqrt(pi/3)*(c1 . N).
+   Operation-for-operation with the CPU's envmap_irradiance; sh is
+   SceneGpu.sh (12 floats, [channel]{c00,c1x,c1y,c1z}). */
+static float3 env_irradiance_sh(constant const float* sh, float3 N) {
+    const float SQRT_PI = 1.7724538509055160f;
+    const float SQRT_PI_3 = 1.0233267079464890f;
+    float3 c00 = float3(sh[0], sh[4], sh[8]);
+    float3 c1d = float3(sh[1] * N.x + sh[2] * N.y + sh[3] * N.z,
+                        sh[5] * N.x + sh[6] * N.y + sh[7] * N.z,
+                        sh[9] * N.x + sh[10] * N.y + sh[11] * N.z);
+    return SQRT_PI * c00 + SQRT_PI_3 * c1d;
 }
 
 static float3 env_procedural(float3 d) {
@@ -588,15 +648,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         device const float* emissive_cdf, int ncdf,
                         int sample_idx, int num_textures,
                         texture2d<float> env_tex, int has_env,
-                        texture2d<float> base_color_tex,
-                        texture2d<float> orm_tex,
-                        texture2d<float> iri_tex) {
+                        constant const float* ibl_sh, int env_mips,
+                        const device TexBundle& scene_tex,
+                        int has_floor, int has_bg_color,
+                        float bg_r, float bg_g, float bg_b) {
     packed_float3 stk_o[MAX_DEPTH + 2];
     packed_float3 stk_d[MAX_DEPTH + 2];
     packed_float3 stk_th[MAX_DEPTH + 2];
     float4 stk_md[MAX_DEPTH + 2];  /* KHR_materials_volume medium: (ior, cr, cg, cb) */
     float stk_ma[MAX_DEPTH + 2];   /* attenuationDistance, may be +inf */
     int stk_dp[MAX_DEPTH + 2];
+    float stk_sr[MAX_DEPTH + 2];   /* Phase 2 IBL: roughness of the surface that
+                                      spawned this ray (< 0 = primary/sharp env) */
     int stk = 0;
     float3 accum = float3(0.0f);
 
@@ -606,6 +669,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
     stk_md[stk] = float4(1.0f, 1.0f, 1.0f, 1.0f);  /* air */
     stk_ma[stk] = INFINITY;
     stk_dp[stk] = 0;
+    stk_sr[stk] = -1.0f;
     stk++;
 
     while (stk > 0) {
@@ -616,6 +680,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
         float4 mid_c = stk_md[stk];   /* (ior, cr, cg, cb) — air is float4(1,1,1,1) */
         float mid_d = stk_ma[stk];
         int dp0 = stk_dp[stk];
+        float sr = stk_sr[stk];
         /* "In a medium" is discriminated by ior > 1 (CPU twin: Medium.ior).
            Air is stored as ior 1.0.  This assumes a transmitting volume
            always has ior > 1 (KHR guarantees it in practice); a volume with
@@ -658,7 +723,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             }
             bool hm = mi >= 0;
 
-            bool hf0 = hit_floor(ro, rd, tf);
+            bool hf0 = has_floor != 0 && hit_floor(ro, rd, tf);
 
             int hit_type = 0;
             bool side_entry = true;   /* spheres always report their near face */
@@ -702,7 +767,15 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             }
 
             if (hit_type == 0) {
-                float3 env_col = has_env ? sample_envmap(env_tex, rd) : env_procedural(rd);
+                /* Phase 2 IBL: a specular/refracted ray (sr >= 0) escaping
+                   to the env samples it blurred by the spawning surface's
+                   roughness (the traced mirror is the sampled lobe in the
+                   sharp limit — no separate env-lobe term); primary rays
+                   (sr < 0) keep the sharp env. */
+                float3 env_col = has_bg_color ? float3(bg_r, bg_g, bg_b)
+                               : (has_env ? (sr >= 0.0f ? sample_env_prefiltered(env_tex, rd, sr, env_mips)
+                                                        : sample_envmap(env_tex, rd))
+                                          : env_procedural(rd));
                 /* Infinite path in an absorbing medium: photon fully absorbed. */
                 if (in_med && vol_sigma_nonzero(float3(mid_c.y, mid_c.z, mid_c.w), mid_d))
                     break;
@@ -729,7 +802,9 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             if (hit_type == 3) {
                 float3 nf = float3(0, 1, 0);
                 float3 fl = floor_color(p);
-                float3 lit = fl * 0.15f;
+                /* Phase 2 IBL: with a loaded env the flat 0.15 floor ambient
+                   is replaced by the band-0..1 SH irradiance for N = +Y. */
+                float3 lit = has_env ? fl * env_irradiance_sh(ibl_sh, nf) : fl * 0.15f;
                 for (int li = 0; li < nl; li++) {
                     float3 ld = normalize(lights[li].pos - p);
                     int sidx = (sample_idx << 2) | li;
@@ -779,16 +854,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             } else if (hit_type == 2) {
                 int midx = tris[mi].mesh_idx;
                 if (midx >= 0 && midx < nm) {
-                    if (mats[midx].tex_index >= 0 && mats[midx].tex_index < num_textures) {
-                        sc_col = sample_base_color(base_color_tex, mesh_uv);
+                    if (mats[midx].tex_index >= 0 && mats[midx].tex_index < num_textures &&
+                        mats[midx].tex_index < MAXTEX) {
+                        sc_col = sample_base_color(scene_tex.t[mats[midx].tex_index], mesh_uv);
                     } else {
                         sc_col = (mesh_uv.x != 0 || mesh_uv.y != 0)
                             ? eval_texture_uv(mesh_uv, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2)
                             : eval_texture(p, sc_col, mats[midx].tex_type, mats[midx].tex_scale, mats[midx].tex_color2);
                     }
                     /* Override material params from ORM texture (linear data): G = roughness, B = metallic, R = AO. */
-                    if (mats[midx].orm_tex_index >= 0 && mats[midx].orm_tex_index < num_textures) {
-                        float3 orm = sample_linear(orm_tex, mesh_uv);
+                    if (mats[midx].orm_tex_index >= 0 && mats[midx].orm_tex_index < num_textures &&
+                        mats[midx].orm_tex_index < MAXTEX) {
+                        float3 orm = sample_linear(scene_tex.t[mats[midx].orm_tex_index], mesh_uv);
                         srough = srough * orm.g;
                         smetal = smetal * orm.b;
                         sao = orm.r;
@@ -819,9 +896,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                  (mat != MAT_GLASS || dot(n_hit, rd) < 0.0f)) {
                  int iri_mid = tris[mi].mesh_idx;
                  float tv = 1.0f; /* three.js: no thickness map -> maximum thickness */
-                 if (mats[iri_mid].iri_tex_index >= 0 && mats[iri_mid].iri_tex_index < num_textures) {
-                     tv = sample_linear(iri_tex, mesh_uv).g;
-                 }
+                  if (mats[iri_mid].iri_tex_index >= 0 && mats[iri_mid].iri_tex_index < num_textures &&
+                      mats[iri_mid].iri_tex_index < MAXTEX) {
+                      tv = sample_linear(scene_tex.t[mats[iri_mid].iri_tex_index], mesh_uv).g;
+                  }
                  float d_nm = mats[iri_mid].iri_thin_min +
                               (mats[iri_mid].iri_thin_max - mats[iri_mid].iri_thin_min) * tv;
                  float cv = min(abs(dot(n_hit, normalize(ro - p))), 1.0f);
@@ -849,12 +927,21 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                   ? min(1.0f, max(0.0f, strans)) : 0.0f;
 
              float3 lit = float3(0.0f);
-            for (int li = 0; li < nl; li++) {
-                float3 ld = normalize(lights[li].pos - p);
-                int sidx = (sample_idx << 2) | li;
-                bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
-                                    sidx, hit_type == 1 ? si : -1,
-                                    hit_type == 2 ? mi : -1);
+             /* Shadow-ray self-avoid must skip the SHADING MESH by its mesh
+                index (in_shadow filters triangles by tris[].mesh_idx), matching
+                the CPU twin which passes the MeshObj index mi.  Passing the
+                global triangle index mi here was a type mismatch: no triangle's
+                mesh_idx ever equalled a triangle index, so the GPU skipped
+                nothing and self-shadowed the shading mesh (visible as the
+                CPU/GPU divergence over the pitted olives under the dish). */
+             int shadow_skip_mesh = (hit_type == 2 && tris[mi].mesh_idx >= 0 &&
+                                     tris[mi].mesh_idx < nm) ? tris[mi].mesh_idx : -1;
+             for (int li = 0; li < nl; li++) {
+                 float3 ld = normalize(lights[li].pos - p);
+                 int sidx = (sample_idx << 2) | li;
+                 bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
+                                     sidx, hit_type == 1 ? si : -1,
+                                     shadow_skip_mesh);
 
                 float diff = max(0.0f, dot(n_hit, ld));
                 float3 vw = normalize(ro - p);
@@ -914,7 +1001,19 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     lit += emd * emissive[ei].emitted * (G / pdf);
                 }
             }
-            float3 amb = sc_col * (0.15f * sao * (1.0f - glass_trans));
+            /* Phase 2 IBL: with a loaded env the flat 0.15 ambient is
+               replaced by the band-0..1 SH diffuse irradiance —
+               kd * irradiance(N) * AO * (1 - transmission), same
+               diffuse convention as the CPU (specular/mirror untouched).
+               Operation order matches the CPU twin: (sc*ir) * f. */
+            float3 amb;
+            if (has_env) {
+                float3 ir = env_irradiance_sh(ibl_sh, n_hit);
+                float f = kd * sao * (1.0f - glass_trans);
+                amb = (sc_col * ir) * f;
+            } else {
+                amb = sc_col * (0.15f * sao * (1.0f - glass_trans));
+            }
             float3 base = amb + lit;
             /* Surface light leaving an in-medium hit must travel the
                already traversed segment back through the medium. */
@@ -937,6 +1036,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 ro = refl_o;
                 rd = refl_d;
                 thru = (thru * Tseg) * f0u;
+                sr = srough;   /* this surface scatters: env-escape blurs by its roughness */
                 continue;
             }
 
@@ -1033,16 +1133,19 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     stk_md[stk] = mid_rc;
                     stk_ma[stk] = mid_dd;
                     stk_dp[stk] = depth + 1;
+                    stk_sr[stk] = srough;
                     stk++;
                 }
 
                 ro = refl_o;
                 rd = refl_d;
                 thru = cur_thru * wr;
+                sr = srough;
             } else {
                 ro = refl_o;
                 rd = refl_d;
                 thru = (thru * Tseg) * wr;
+                sr = srough;
             }
         }
     }
@@ -1061,9 +1164,7 @@ kernel void rk(
     device const EmissiveGpu* emissive [[buffer(8)]],
     device const float* emissive_cdf [[buffer(9)]],
     texture2d<float> env_tex [[texture(0)]],
-    texture2d<float> base_color_tex [[texture(1)]],
-    texture2d<float> orm_tex [[texture(2)]],
-    texture2d<float> iri_tex [[texture(3)]],
+    const device TexBundle& scene_tex [[buffer(10)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -1102,11 +1203,11 @@ kernel void rk(
                              lights, scene.num_lights,
                              emissive, scene.num_emissive,
                              emissive_cdf, scene.num_emissive_cdf,
-                              sidx, scene.num_textures,
-                              env_tex, scene.has_env,
-                              base_color_tex,
-                              orm_tex,
-                              iri_tex);
+                               sidx, scene.num_textures,
+                               env_tex, scene.has_env, scene.sh, scene.env_mips,
+                               scene_tex,
+                               scene.has_floor, scene.has_bg_color,
+                               scene.bg_r, scene.bg_g, scene.bg_b);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

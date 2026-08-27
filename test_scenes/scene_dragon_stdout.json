@@ -52,6 +52,7 @@
     "file": "envmaps/polyhaven_haven_01_1k.hdr",
     "intensity": 7.0
   },
+  "floor": true,
   "width": 1024,
   "height": 768
 }

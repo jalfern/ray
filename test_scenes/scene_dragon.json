@@ -53,6 +53,7 @@
     "intensity": 7.0
   },
   "output": "images/dragon_attenuation.png",
+  "floor": true,
   "width": 1024,
   "height": 768
 }

@@ -20,6 +20,11 @@ make test     # Render all test scenes
 ./ray2 --mesh-stats scenes/scene.json # Run diagnostics (geometry, BVH, materials)
 ```
 
+The glTF test scenes (lamp, dragon, dish, suzanne, …) live in
+`test_scenes/`, not `scenes/`; run them from the repo root (relative
+`gltf` paths resolve against the scene file's directory, but
+`environment.file` resolves against the CWD).
+
 ## Project Layout
 
 ```
@@ -50,7 +55,8 @@ make test     # Render all test scenes
 |---------|--------|
 | CPU + Metal GPU backends | Done |
 | BVH-accelerated mesh rendering | Done |
-| Spheres, meshes, infinite floor | Done |
+| Spheres, meshes, infinite floor (`"floor": true` / `{"checkerboard": true}`, opt-in) | Done |
+| Scene background color (`"background": [r,g,b]` or `{"color": [r,g,b]}`; miss returns it instead of env/procedural) | Done |
 | Materials: plastic, metallic, glass, emissive, subsurface | Done |
 | Texture mapping (procedural: checker, polka, marble, rings) | Done |
 | UV-mapped textures (OBJ + glTF path) | Done |
@@ -101,13 +107,28 @@ python3 tools/ppm_diff.py /tmp/lamp_cpu.ppm /tmp/lamp_gpu.ppm \
 both renders write raw PPM to stdout (a `28T`/`GPU` prefix line precedes the
 PPM header; the diff tool scans for `P6\n`). Both backends are
 byte-deterministic, so the counts are exact, not a noise level. Current
-baseline (768×1024, post-review-bug-fix CPU side binding + universal origin
-push): **126,677** differing pixels (16.11%), sum_abs_err 8,149,177, max
-channel err 86 — masked: inside 109,548 / outside 17,129, inside share
-86.48% (previous: 126,899 / 7,811,679 / 86, inside 109,764 / outside
-17,135 — post-Phase-4; rebaseline history in nextsteps.md).
+baseline (768×1024): **0** differing pixels — CPU and GPU are now
+byte-identical on the lamp scene, inside and outside the glass-sphere mask.
+This landed with two GPU fixes: (1) a per-material texture array — the kernel
+now samples `textures[tex_index / orm_tex_index / iri_tex_index]` from an
+argument-buffer `array<texture2d<float>, MAXTEX>` (MAXTEX=64) that mirrors the
+CPU's free per-material indexing, replacing the old single-texture-per-map-type
+binding that only ever matched the first textured mesh; (2) a direct-light
+shadow-ray fix in `shaders.metal` where the triangle index was passed as
+`in_shadow`'s `skip_mesh` (which filters by `tris[].mesh_idx`, i.e. mesh index).
+The IridescentDishWithOlives 4-material / 11-texture case — previously ~41%
+divergent — is likewise byte-identical now. (Rebaseline history in
+nextsteps.md.)
 
 ## Next Steps
 
-The phased material/texture plan (anchored on **IridescenceLamp**), current
-AE baseline, and the investigation log live in [nextsteps.md](nextsteps.md).
+Three plan documents, newest first:
+
+- [iridescent_dish_nextsteps.md](iridescent_dish_nextsteps.md) — the active
+  plan, anchored on **IridescentDishWithOlives** (IBL, normal maps, MASK,
+  iridescence color lobe). Phase 1 (opt-in floor + background color) landed.
+- [dragon_nextsteps.md](dragon_nextsteps.md) — DragonAttenuation record:
+  in-medium surface-term fix, transmission model, framing.
+- [nextsteps.md](nextsteps.md) — the IridescenceLamp history (PBR
+  foundation, iridescence, volume, Phase 4 refraction fix), the full AE
+  rebaseline log, and the medium/longer-term list.

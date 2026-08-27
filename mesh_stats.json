@@ -1,5 +1,5 @@
 {
-  "file": "test_scenes/IridescenceLamp/IridescenceLamp_absorption.gltf",
+  "file": "test_scenes/IridescentDishWithOlives/IridescentDishWithOlives.gltf",
   "meshes": [
     {
       "mesh_index": 0,
@@ -7,19 +7,19 @@
       "prims": [
         {
           "prim_index": 0,
-          "num_verts": 7036,
-          "num_indices": 36246,
-          "num_tris": 12082,
+          "num_verts": 1090,
+          "num_indices": 6144,
+          "num_tris": 2048,
           "material": 0,
           "degenerate_mag_0": 0,
           "degenerate_mag_1e-9": 0,
-          "degenerate_mag_1e-6": 322,
-          "cross_mag_min": 4.478921e-07,
-          "cross_mag_max": 6.743641e-04,
-          "cross_mag_mean": 6.164652e-05,
+          "degenerate_mag_1e-6": 0,
+          "cross_mag_min": 2.790888e-05,
+          "cross_mag_max": 2.052881e-03,
+          "cross_mag_mean": 3.563252e-04,
           "bitwise_identical": 0,
           "min_idx": 0,
-          "max_idx": 7035,
+          "max_idx": 1089,
           "index_oob": false
         }
       ]
@@ -30,19 +30,19 @@
       "prims": [
         {
           "prim_index": 0,
-          "num_verts": 2990,
-          "num_indices": 16896,
-          "num_tris": 5632,
+          "num_verts": 10992,
+          "num_indices": 51840,
+          "num_tris": 17280,
           "material": 1,
           "degenerate_mag_0": 0,
           "degenerate_mag_1e-9": 0,
           "degenerate_mag_1e-6": 0,
-          "cross_mag_min": 7.780957e-06,
-          "cross_mag_max": 9.018298e-05,
-          "cross_mag_mean": 6.364564e-05,
+          "cross_mag_min": 4.217186e-06,
+          "cross_mag_max": 6.429561e-05,
+          "cross_mag_mean": 3.448041e-05,
           "bitwise_identical": 0,
           "min_idx": 0,
-          "max_idx": 2989,
+          "max_idx": 10991,
           "index_oob": false
         }
       ]
@@ -53,19 +53,42 @@
       "prims": [
         {
           "prim_index": 0,
-          "num_verts": 657,
-          "num_indices": 3456,
-          "num_tris": 1152,
+          "num_verts": 1857,
+          "num_indices": 10752,
+          "num_tris": 3584,
           "material": 2,
           "degenerate_mag_0": 0,
           "degenerate_mag_1e-9": 0,
           "degenerate_mag_1e-6": 0,
-          "cross_mag_min": 1.424108e-04,
-          "cross_mag_max": 5.725111e-04,
-          "cross_mag_mean": 3.676845e-04,
+          "cross_mag_min": 1.973357e-06,
+          "cross_mag_max": 3.908583e-04,
+          "cross_mag_mean": 1.627213e-04,
           "bitwise_identical": 0,
           "min_idx": 0,
-          "max_idx": 656,
+          "max_idx": 1856,
+          "index_oob": false
+        }
+      ]
+    },
+    {
+      "mesh_index": 3,
+      "num_prims": 1,
+      "prims": [
+        {
+          "prim_index": 0,
+          "num_verts": 924,
+          "num_indices": 4608,
+          "num_tris": 1536,
+          "material": 3,
+          "degenerate_mag_0": 0,
+          "degenerate_mag_1e-9": 0,
+          "degenerate_mag_1e-6": 0,
+          "cross_mag_min": 8.049256e-06,
+          "cross_mag_max": 2.037557e-03,
+          "cross_mag_mean": 4.692131e-04,
+          "bitwise_identical": 0,
+          "min_idx": 0,
+          "max_idx": 923,
           "index_oob": false
         }
       ]

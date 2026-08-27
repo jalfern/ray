@@ -438,13 +438,19 @@ static float in_shadow(V p, LightData light, SphereData* spheres, int num_sphere
     return 0;
 }
 
+typedef struct {
+    int has_floor;
+    int has_bg_color;
+    V bg_color;
+} SceneOpts;
+
 static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                    MeshObjData* meshes, int num_meshes,
                    LightData* lights, int num_lights,
                    EmissiveSurf* emissive, int num_emissive,
                    int sample_idx, EnvMap* env,
                    ImageTexture* textures, int num_textures,
-                    Medium med) {
+                    Medium med, SceneOpts opts, float spec_rough) {
     if (depth > MAX_DEPTH) return (V){0,0,0};
 
     float ts, tf;
@@ -473,7 +479,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     }
     int hm = (mi >= 0);
 
-    int hf = hit_floor(o, d, &tf);
+    int hf = opts.has_floor && hit_floor(o, d, &tf);
 
     int hit_type = 0;
     int side = 1;   /* spheres always report their near face (a front hit) */
@@ -514,8 +520,20 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (med.ior > 1.0f &&
             vol_sigma_nonzero(med.cr, med.cg, med.cb, med.att_dist))
             return (V){0,0,0};
+        if (opts.has_bg_color)
+            return (V){opts.bg_color.x, opts.bg_color.y, opts.bg_color.z};
         float er, eg, eb;
-        envmap_sample(env, d.x, d.y, d.z, &er, &eg, &eb);
+        /* Phase 2 IBL: a specular/refracted ray (spec_rough >= 0) escaping
+           to the environment sees it blurred by the roughness of the
+           surface that spawned it — the traced mirror ray is the sampled
+           lobe in the sharp limit, so there is no separate env-lobe term
+           to double-count against.  Primary rays (spec_rough < 0) keep
+           the sharp env.  Without a loaded env the prefiltered path
+           falls back to the sharp sample exactly (legacy behavior). */
+        if (spec_rough >= 0.0f)
+            envmap_sample_prefiltered(env, d.x, d.y, d.z, spec_rough, &er, &eg, &eb);
+        else
+            envmap_sample(env, d.x, d.y, d.z, &er, &eg, &eb);
         return (V){er, eg, eb};
     }
 
@@ -538,7 +556,16 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     if (hit_type == 3) {
         V n_floor = (V){0, 1, 0};
         V base = floor_color(p);
-        V lit = mul(base, 0.15f);
+        /* Phase 2 IBL: with a loaded env the flat 0.15 floor ambient is
+           replaced by the band-0..1 SH irradiance for N = +Y. */
+        V lit;
+        if (env && env->data) {
+            float ir, ig, ib;
+            envmap_irradiance(env, 0.0f, 1.0f, 0.0f, &ir, &ig, &ib);
+            lit = (V){base.x * ir, base.y * ig, base.z * ib};
+        } else {
+            lit = mul(base, 0.15f);
+        }
         for (int li = 0; li < num_lights; li++) {
             V light_pos = lights[li].pos;
             V light_dir = norm(sub(light_pos, p));
@@ -755,7 +782,22 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
-    V ambient = mul(sc, 0.15f * sphere_ao * (1.0f - glass_trans));
+    /* Phase 2 IBL: with a loaded env the flat 0.15 ambient is replaced by
+       the band-0..1 SH diffuse irradiance — three.js-parity-grade:
+       kd * irradiance(N) * AO * (1 - transmission).  AO and the
+       transmission scale follow the existing diffuse convention
+       (ambient + per-light diffuse only; specular/mirror untouched).
+       Without a loaded env the legacy flat ambient is kept exactly. */
+    V ambient;
+    if (env && env->data) {
+        float ir, ig, ib;
+        envmap_irradiance(env, n.x, n.y, n.z, &ir, &ig, &ib);
+        float f = kd * sphere_ao * (1.0f - glass_trans);
+        /* (sc*ir)*f, per component — matches the GPU's (sc_col * ir) * f */
+        ambient = (V){sc.x * ir * f, sc.y * ig * f, sc.z * ib * f};
+    } else {
+        ambient = mul(sc, 0.15f * sphere_ao * (1.0f - glass_trans));
+    }
     V base_color = add(ambient, lit);
     /* Surface light leaving an in-medium hit must travel the already
        traversed segment back through the medium to the camera. */
@@ -773,8 +815,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,
                            spheres, num_spheres, meshes, num_meshes,
                            lights, num_lights, emissive, num_emissive,
-                           sample_idx, env, textures, num_textures,
-                           med);
+                            sample_idx, env, textures, num_textures,
+                            med, opts, sphere_rough);
     refl_col = (V){refl_col.x * Tseg.x, refl_col.y * Tseg.y, refl_col.z * Tseg.z};
 
     if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
@@ -857,7 +899,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                              spheres, num_spheres, meshes, num_meshes,
                              lights, num_lights, emissive, num_emissive,
                              sample_idx, env, textures, num_textures,
-                             refr_med);
+                             refr_med, opts, sphere_rough);
         refr_col = (V){refr_col.x * sc.x, refr_col.y * sc.y, refr_col.z * sc.z};
         refr_col = (V){refr_col.x * Tseg.x, refr_col.y * Tseg.y, refr_col.z * Tseg.z};
     }
@@ -901,6 +943,7 @@ typedef struct {
     Image* img;
     ImageTexture* textures;
     int num_textures;
+    SceneOpts opts;
 } RenderContext;
 
 static void render_rows(RenderContext* ctx, int y_start, int y_end) {
@@ -934,7 +977,7 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                                         ctx->emissive, ctx->num_emissive,
                                         sample_idx, ctx->env,
                                         ctx->textures, ctx->num_textures,
-                                        med_air());
+                                        med_air(), ctx->opts, -1.0f);
                     color_sum = add(color_sum, color);
                     sample_count++;
                 }
@@ -1122,6 +1165,9 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.env = envmap_load(scene->env_file, scene->env_intensity);
     ctx.textures = scene->textures;
     ctx.num_textures = scene->num_textures;
+    ctx.opts.has_floor = scene->has_floor;
+    ctx.opts.has_bg_color = scene->has_bg_color;
+    ctx.opts.bg_color = (V){scene->bg_color[0], scene->bg_color[1], scene->bg_color[2]};
     ctx.img = create_image(scene->width, scene->height);
     return ctx;
 }

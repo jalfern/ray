@@ -128,9 +128,12 @@ The mirror's intent was to flip the dragon left/right to match the reference
 - **Dragon rotation `(0, 0, 0.7071, −0.7071)`** — a 90° rotation about **Z**
   instead of the original 90° about **X** (`(0.7071, 0, 0, 0.7071)`). It tips
   the dragon onto its side: bbox y∈[−2.49, 1.03] — most of the body below the
-  floor plane. (The renderer's floor is unconditional — `hit_floor` in
-  `renderer.cc` runs with no `has_floor` gate — so the submerged part is
-  simply hidden.)
+   floor plane. (The renderer's floor was unconditional at the time —
+   `hit_floor` in `renderer.cc` ran with no `has_floor` gate — so the
+   submerged part was simply hidden. Update 2026-08-26: the floor is now
+   opt-in behind `"floor"` (iridescent_dish_nextsteps.md Phase 1); all
+   dragon scenes carry an explicit `"floor": true` and re-rendered
+   byte-identical to the pre-change binary.)
 - **Cloth node scaled 3.5 → 12** with the translation removed. The backdrop
   cloth then spans z∈[−5.5, +17.1] and swallows the camera at z=12 (the
   glossy "floor" in the broken render is the cloth draped in front of the

@@ -10,6 +10,7 @@
     "intensity": 1.0
   },
   "output": "images/reference/test_lamp_absorption.png",
+  "floor": true,
   "width": 768,
   "height": 1024
 }

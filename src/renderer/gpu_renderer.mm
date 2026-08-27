@@ -33,23 +33,48 @@
 
 #include "shader_src.h"    // defines: static const char* kShaderSource
 
-static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, const char* env_file, float intensity) {
-    if (!env_file || !env_file[0]) return nil;
-    EnvMap* env = envmap_load(env_file, intensity);
+/* Uploads the env (level 0 AND the CPU-built prefilter chain) as a
+   mipmapped RGBA32Float texture.  env->data is packed RGB (3 floats/px)
+   but the texture is RGBA32Float (4 floats/px): repack each level,
+   otherwise replaceRegion misreads every row (bytesPerRow < texture
+   row width is an API violation and the sampled image comes out
+   sheared/garbage).  Level sizes/chain match the CPU's env->mips
+   exactly (box downsample in envmap.cc), so the shader's
+   roughness->lod mapping hits the same data the CPU would sample. */
+static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, EnvMap* env) {
     if (!env || !env->data) return nil;
 
     MTLTextureDescriptor* td =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
-                                                        width:env->w height:env->h mipmapped:NO];
+                                                         width:env->w height:env->h mipmapped:YES];
     td.usage = MTLTextureUsageShaderRead;
     td.storageMode = (MTLStorageMode)MTLResourceStorageModeShared;
     id<MTLTexture> tex = [device newTextureWithDescriptor:td];
-    if (!tex) { envmap_free(env); return nil; }
+    if (!tex) return nil;
+    /* Metal's full chain is max(1,w>>l) x max(1,h>>l) down to 1x1 — the
+       same sizes envmap_build_mips produced; guard the assumption so a
+       mismatch is loud instead of silently sampling zero-filled levels. */
+    if ((int)tex.mipmapLevelCount != env->num_mips) {
+        fprintf(stderr, "[gpu] env mip mismatch: texture %lu levels vs CPU %d\n",
+                (unsigned long)tex.mipmapLevelCount, env->num_mips);
+    }
 
-    [tex replaceRegion:MTLRegionMake2D(0, 0, env->w, env->h) mipmapLevel:0
-              withBytes:env->data bytesPerRow:env->w * 3 * sizeof(float)];
-
-    envmap_free(env);
+    int nlevels = env->num_mips < (int)tex.mipmapLevelCount ? env->num_mips : (int)tex.mipmapLevelCount;
+    for (int l = 0; l < nlevels; l++) {
+        int w = env->mip_w[l], h = env->mip_h[l];
+        const float* src = env->mips[l];
+        size_t npx = (size_t)w * h;
+        float* rgba = (float*)malloc(npx * 4 * sizeof(float));
+        for (size_t i = 0; i < npx; i++) {
+            rgba[i * 4 + 0] = src[i * 3 + 0];
+            rgba[i * 4 + 1] = src[i * 3 + 1];
+            rgba[i * 4 + 2] = src[i * 3 + 2];
+            rgba[i * 4 + 3] = 1.0f;
+        }
+        [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:l
+                  withBytes:rgba bytesPerRow:(NSUInteger)w * 4 * sizeof(float)];
+        free(rgba);
+    }
     return tex;
 }
 
@@ -86,6 +111,10 @@ typedef struct {
     int width, height, has_env;
     float fov_scale;
     int num_textures;
+    int has_floor, has_bg_color;
+    float bg_r, bg_g, bg_b;
+    float sh[12];   /* Phase 2 IBL diffuse SH (mirror of SceneGpu.sh) */
+    int env_mips;   /* mip-chain length of the env texture (0 = no env) */
 } SceneGpu;
 
 typedef struct {
@@ -125,7 +154,7 @@ typedef struct {
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
 static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.metal");
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
-static_assert(sizeof(SceneGpu) == 52, "SceneGpu layout must match shaders.metal");
+static_assert(sizeof(SceneGpu) == 124, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 108, "MeshMatGpu layout must match shaders.metal");
 
@@ -134,6 +163,7 @@ static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool gpu_initialized = false;
 static id<MTLDevice> gpu_device = nil;
 static id<MTLComputePipelineState> gpu_pso = nil;
+static id<MTLFunction> gpu_fn = nil;
 static id<MTLCommandQueue> gpu_queue = nil;
 
 static void gpu_init_once(void) {
@@ -153,6 +183,7 @@ static void gpu_init_once(void) {
             if (lib) {
                 id<MTLFunction> fn = [lib newFunctionWithName:@"rk"];
                 if (fn) {
+                    gpu_fn = fn;
                     gpu_pso = [gpu_device newComputePipelineStateWithFunction:fn error:&err];
                  }
                 if (gpu_pso) {
@@ -391,9 +422,16 @@ Image* render_frame_gpu(const Scene* scene) {
           sc.exposure = scene->exposure;
           sc.width = W;
           sc.height = H;
-          sc.has_env = scene->env_file[0] ? 1 : 0;
-          sc.fov_scale = tanf(scene->fov_y * 0.5f * (float)M_PI / 180.0f);
+           sc.has_env = 0;
+           sc.env_mips = 0;
+           for (int i = 0; i < 12; i++) sc.sh[i] = 0.0f;
+           sc.fov_scale = tanf(scene->fov_y * 0.5f * (float)M_PI / 180.0f);
           sc.num_textures = scene->num_textures;
+          sc.has_floor = scene->has_floor;
+          sc.has_bg_color = scene->has_bg_color;
+          sc.bg_r = scene->bg_color[0];
+          sc.bg_g = scene->bg_color[1];
+          sc.bg_b = scene->bg_color[2];
           fprintf(stderr, "[gpu] fov_y=%.1f  fov_scale=%.6f  top_uv_y=%.6f  bottom_uv_y=%.6f\n",
                   scene->fov_y, sc.fov_scale,
                   (1.0f - 2.0f * 0.0f / H) * sc.fov_scale,
@@ -422,20 +460,53 @@ Image* render_frame_gpu(const Scene* scene) {
          id<MTLBuffer> matBuf = [gpu_device newBufferWithBytes:mats_ptr length:mat_len options:opts];
          id<MTLBuffer> cdfBuf = [gpu_device newBufferWithBytes:cdf_ptr length:cdf_len options:opts];
 
-          // Real env texture from HDR file, or dummy 1x1 placeholder
-          id<MTLTexture> envTex = gpu_create_env_texture(gpu_device, scene->env_file, scene->env_intensity);
-          if (!envTex) {
-              MTLTextureDescriptor* td =
-               [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
-                                                               width:1 height:1 mipmapped:NO];
-              td.usage = MTLTextureUsageShaderRead;
-              envTex = [gpu_device newTextureWithDescriptor:td];
-              sc.has_env = 0;
-          }
+           // Real env texture from HDR file, or dummy 1x1 placeholder.
+           // One load feeds both the mip-mapped texture and the IBL SH
+           // coefficients in SceneGpu (the CPU renderer loads the same
+           // file through the same envmap_load, so SH values and mip
+           // chains are bit-identical across backends).
+           id<MTLTexture> envTex = nil;
+           {
+               EnvMap* env = scene->env_file[0] ? envmap_load(scene->env_file, scene->env_intensity) : NULL;
+               if (env && env->data) {
+                   envTex = gpu_create_env_texture(gpu_device, env);
+                   if (envTex) {
+                       sc.has_env = 1;
+                       sc.env_mips = env->num_mips;
+                       for (int i = 0; i < 12; i++) sc.sh[i] = env->sh[i];
+                   }
+               }
+               envmap_free(env);
+           }
+           if (!envTex) {
+               MTLTextureDescriptor* td =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                                width:1 height:1 mipmapped:NO];
+               td.usage = MTLTextureUsageShaderRead;
+               envTex = [gpu_device newTextureWithDescriptor:td];
+               sc.has_env = 0;
+           }
 
-          // --- Base color textures ---
-          id<MTLTexture> baseColorTex = nil;
-          for (int i = 0; i < scene->num_textures && !baseColorTex; i++) {
+          // --- Scene textures: bind ALL of them as an argument-buffer texture
+          //     array so the kernel samples textures[tex_index / orm_tex_index /
+          //     iri_tex_index] per material, mirroring the CPU.  Slots without a
+          //     usable image fall back to a shared 1x1 dummy (never sampled for a
+          //     material whose index is -1, since those take the procedural path). ---
+          const int RAY_MAXTEX = 64;   /* must match #define MAXTEX in shaders.metal */
+          if (scene->num_textures > RAY_MAXTEX)
+              fprintf(stderr, "[gpu] WARNING: %d scene textures exceed MAXTEX(%d); extras ignored\n",
+                      scene->num_textures, RAY_MAXTEX);
+          id<MTLTexture> texArr[RAY_MAXTEX];
+          {
+              MTLTextureDescriptor* dd =
+                  [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                    width:1 height:1 mipmapped:NO];
+              dd.usage = MTLTextureUsageShaderRead;
+              dd.storageMode = MTLStorageModeShared;
+              id<MTLTexture> dummyT = [gpu_device newTextureWithDescriptor:dd];
+              for (int i = 0; i < RAY_MAXTEX; i++) texArr[i] = dummyT;
+          }
+          for (int i = 0; i < scene->num_textures && i < RAY_MAXTEX; i++) {
               ImageTexture* it = &scene->textures[i];
               if (it->data && it->width > 0 && it->height > 0) {
                   MTLTextureDescriptor* td =
@@ -443,76 +514,28 @@ Image* render_frame_gpu(const Scene* scene) {
                                                                         width:it->width height:it->height mipmapped:NO];
                   td.usage = MTLTextureUsageShaderRead;
                   td.storageMode = MTLStorageModeShared;
-                  baseColorTex = [gpu_device newTextureWithDescriptor:td];
-                  if (baseColorTex) {
+                  id<MTLTexture> t = [gpu_device newTextureWithDescriptor:td];
+                  if (t) {
                       MTLRegion region = MTLRegionMake2D(0, 0, it->width, it->height);
-                      [baseColorTex replaceRegion:region mipmapLevel:0 withBytes:it->data bytesPerRow:it->width * 4];
+                      [t replaceRegion:region mipmapLevel:0 withBytes:it->data bytesPerRow:it->width * 4];
+                      texArr[i] = t;
                   }
               }
           }
-          if (!baseColorTex) {
-              MTLTextureDescriptor* td =
-                  [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                    width:1 height:1 mipmapped:NO];
-              td.usage = MTLTextureUsageShaderRead;
-              baseColorTex = [gpu_device newTextureWithDescriptor:td];
-          }
-
-          // --- ORM texture ---
-          id<MTLTexture> ormTex = nil;
-          for (int i = 0; i < scene->num_textures && !ormTex; i++) {
-              ImageTexture* it = &scene->textures[i];
-              if (it != &scene->textures[0] && it->data && it->width > 0 && it->height > 0) {
-                  MTLTextureDescriptor* td =
-                      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                        width:it->width height:it->height mipmapped:NO];
-                  td.usage = MTLTextureUsageShaderRead;
-                  td.storageMode = MTLStorageModeShared;
-                  ormTex = [gpu_device newTextureWithDescriptor:td];
-                  if (ormTex) {
-                      MTLRegion region = MTLRegionMake2D(0, 0, it->width, it->height);
-                      [ormTex replaceRegion:region mipmapLevel:0 withBytes:it->data bytesPerRow:it->width * 4];
-                  }
+          id<MTLBuffer> texArgBuf = nil;
+          {
+              id<MTLArgumentEncoder> argEnc = [gpu_fn newArgumentEncoderWithBufferIndex:10];
+              if (argEnc) {
+                  texArgBuf = [gpu_device newBufferWithLength:argEnc.encodedLength options:opts];
+                  [argEnc setArgumentBuffer:texArgBuf offset:0];
+                  /* TexBundle's array<texture2d<float>, MAXTEX> is laid out INLINE
+                     as MAXTEX consecutive texture bindings in this argument buffer
+                     (encodedLength = MAXTEX * 8), so set each slot directly. */
+                  for (int i = 0; i < RAY_MAXTEX; i++) [argEnc setTexture:texArr[i] atIndex:i];
+              } else {
+                  fprintf(stderr, "[gpu] FATAL: no argument encoder for texture array (buffer 10)\n");
               }
           }
-           if (!ormTex) {
-               MTLTextureDescriptor* td =
-                   [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                     width:1 height:1 mipmapped:NO];
-               td.usage = MTLTextureUsageShaderRead;
-               ormTex = [gpu_device newTextureWithDescriptor:td];
-           }
-
-           // --- Iridescence thickness texture (linear data) ---
-           int iri_scene_idx = -1;
-           for (int m = 0; m < scene->num_meshes && iri_scene_idx < 0; m++) {
-               int idx = scene->meshes[m].iri_tex_index;
-               if (idx >= 0 && idx < scene->num_textures) iri_scene_idx = idx;
-           }
-           id<MTLTexture> iriTex = nil;
-           if (iri_scene_idx >= 0) {
-               ImageTexture* it = &scene->textures[iri_scene_idx];
-               if (it->data && it->width > 0 && it->height > 0) {
-                   MTLTextureDescriptor* td =
-                       [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                         width:it->width height:it->height mipmapped:NO];
-                   td.usage = MTLTextureUsageShaderRead;
-                   td.storageMode = MTLStorageModeShared;
-                   iriTex = [gpu_device newTextureWithDescriptor:td];
-                   if (iriTex) {
-                       MTLRegion region = MTLRegionMake2D(0, 0, it->width, it->height);
-                       [iriTex replaceRegion:region mipmapLevel:0 withBytes:it->data bytesPerRow:it->width * 4];
-                   }
-               }
-           }
-           if (!iriTex) {
-               MTLTextureDescriptor* td =
-                   [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                     width:1 height:1 mipmapped:NO];
-               td.usage = MTLTextureUsageShaderRead;
-               td.storageMode = MTLStorageModeShared;
-               iriTex = [gpu_device newTextureWithDescriptor:td];
-           }
 
            free(spheres); free(lights); free(emissive); free(mats); free(emissive_cdf);
           free(all_tris); free(all_bvh);
@@ -531,10 +554,8 @@ Image* render_frame_gpu(const Scene* scene) {
          [enc setBuffer:lightBuf offset:0 atIndex:7];
          [enc setBuffer:emisBuf offset:0 atIndex:8];
          [enc setBuffer:cdfBuf offset:0 atIndex:9];
-           [enc setTexture:envTex atIndex:0];
-           [enc setTexture:baseColorTex atIndex:1];
-           [enc setTexture:ormTex atIndex:2];
-           [enc setTexture:iriTex atIndex:3];
+            [enc setTexture:envTex atIndex:0];
+            if (texArgBuf) [enc setBuffer:texArgBuf offset:0 atIndex:10];
 
          MTLSize tg = MTLSizeMake(16, 16, 1);
          MTLSize grid = MTLSizeMake(W, H, 1);

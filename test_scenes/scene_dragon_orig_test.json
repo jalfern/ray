@@ -12,6 +12,7 @@
     "intensity": 4.0
   },
   "output": "images/dragon_orig_test.png",
+  "floor": true,
   "width": 1024,
   "height": 768
 }

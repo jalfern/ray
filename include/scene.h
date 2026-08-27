@@ -90,6 +90,8 @@ typedef struct {
     char env_file[256];
     float env_intensity;
     int has_floor;
+    int has_bg_color;
+    float bg_color[3];
     char output[256];
     int has_animation;
     AnimationConfig animation;

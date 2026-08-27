@@ -1793,7 +1793,7 @@ static void build_gltf_scene(
             out->focus_dist = sqrtf(
                 fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]);
             out->aperture = 0.0f;
-            out->fov_y = cameras[ni].yfov * (180.0f / (float)M_PI);
+            out->fov_y = cameras[nodes[ni].camera].yfov * (180.0f / (float)M_PI);
         }
 
         /* Push children. */

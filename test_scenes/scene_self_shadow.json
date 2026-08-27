@@ -12,6 +12,7 @@
     }
   ],
   "output": "images/test_self_shadow.png",
+  "floor": true,
   "width": 800,
   "height": 600
 }

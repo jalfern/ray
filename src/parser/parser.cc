@@ -386,10 +386,13 @@ Scene* parse_scene(const char* filename) {
     scene->env_file[0] = '\0';
     scene->env_intensity = 1.0f;
     scene->has_floor = 0;
+    scene->has_bg_color = 0;
+    scene->bg_color[0] = scene->bg_color[1] = scene->bg_color[2] = 0.0f;
     scene->num_spheres = 0;
     scene->spheres = NULL;
     scene->num_meshes = 0;
     scene->meshes = NULL;
+    int saw_lights = 0;
 
 #define PARSE_FAIL do { free(json); free_scene(scene); return NULL; } while(0)
 
@@ -476,6 +479,7 @@ Scene* parse_scene(const char* filename) {
             }
             if (*p == '}') p++;
         } else if (strcmp(key, "lights") == 0) {
+            saw_lights = 1;
             p = parse_lights_array(p, scene);
             if (!p) PARSE_FAIL;
         } else if (strcmp(key, "spheres") == 0) {
@@ -597,6 +601,44 @@ Scene* parse_scene(const char* filename) {
             }
              if (*p == '}') p++;
           }
+        } else if (strcmp(key, "background") == 0) {
+            if (*p == '[') {
+                Vec3 bg;
+                p = parse_vec3(p, &bg);
+                if (!p) PARSE_FAIL;
+                scene->has_bg_color = 1;
+                scene->bg_color[0] = bg.x;
+                scene->bg_color[1] = bg.y;
+                scene->bg_color[2] = bg.z;
+            } else if (*p == '{') {
+                p++;
+                while (*p && *p != '}') {
+                    char bkey[64];
+                    p = parse_string(p, bkey, sizeof(bkey));
+                    if (!p) PARSE_FAIL;
+                    p = skip_ws(p);
+                    if (*p != ':') PARSE_FAIL;
+                    p++;
+                    p = skip_ws(p);
+
+                    if (strcmp(bkey, "color") == 0) {
+                        Vec3 bg;
+                        p = parse_vec3(p, &bg);
+                        if (!p) PARSE_FAIL;
+                        scene->has_bg_color = 1;
+                        scene->bg_color[0] = bg.x;
+                        scene->bg_color[1] = bg.y;
+                        scene->bg_color[2] = bg.z;
+                    } else {
+                        while (*p && *p != ',' && *p != '}') p++;
+                    }
+                    p = skip_ws(p);
+                    if (*p == ',') p++;
+                }
+                if (*p == '}') p++;
+            } else {
+                while (*p && *p != ',' && *p != '}') p++;
+            }
         } else {
              while (*p && *p != ',' && *p != '}') p++;
          }
@@ -607,8 +649,9 @@ Scene* parse_scene(const char* filename) {
 
 #undef PARSE_FAIL
 
-    // Default light if none specified
-    if (scene->num_lights == 0) {
+    // Default light if none specified (an explicit "lights": [] means
+    // lightless — the IBL dish scene relies on that)
+    if (!saw_lights && scene->num_lights == 0) {
         scene->num_lights = 1;
         scene->lights = (Light*)malloc(sizeof(Light));
         scene->lights[0].pos = (Vec3){5, 10, 5};

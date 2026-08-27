@@ -52,7 +52,11 @@
 - **occlusionTexture:** References the same ORM texture in IridescenceLamp;
   its R channel is the AO consumed above (the `index` key is the same ORM
   image the parser already loads via `pbrMetallicRoughnessTexture`).
-- **normalTexture / emissiveTexture:** Not implemented (IridescenceLamp uses neither).
+  IridescentDishWithOlives carries a *standalone* occlusionTexture with real
+  variation — parsing it is planned (iridescent_dish_nextsteps.md Phase 3).
+- **normalTexture / emissiveTexture:** Not implemented (IridescenceLamp uses
+  neither). IridescentDishWithOlives ships three normal maps (incl.
+  `normalTexture.scale` 2.0) — planned, iridescent_dish_nextsteps.md Phase 3.
 
 ### Diagnostics Infrastructure
 - **`--mesh-stats` flag:** Triggers comprehensive diagnostic output at every pipeline stage.
@@ -72,6 +76,12 @@
 - Vite dev server, hot reload, serves from repo root.
 
 ## Potential Next Steps
+
+> The active plan has moved on: see **iridescent_dish_nextsteps.md**
+> (IridescentDishWithOlives: IBL, normal maps, MASK, iridescence color
+> lobe; Phase 1 scene keys landed 2026-08-26) and **dragon_nextsteps.md**
+> (DragonAttenuation, complete). The phase history below is retained as
+> the IridescenceLamp record and the AE rebaseline log.
 
 Material/texture plan, anchored on **IridescenceLamp**
 (`test_scenes/IridescenceLamp/`, scene `test_scenes/scene_lamp.json`). The
@@ -552,7 +562,9 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED — current: **126,677** differing px /
+**Status:** BASELINE ESTABLISHED — current: **39,875** differing px (see
+"Rebaseline after the dragon transmission work" near the end of this
+section). Superseded: 126,677 differing px /
 sum_abs_err 8,149,177 / max channel err 86 (masked: inside 109,548 /
 8,093,533; outside 17,129 / 55,644) — post-review-bug-fix CPU side
 binding + universal origin push ("Rebaseline after the review-bug
@@ -666,9 +678,26 @@ weights with film-weighted ones changes the residual scale of the
  winning mesh changes *which* glass traversals the recursive CPU reports
  vs the iterative GPU, shifting magnitude into a subset of already-diverging
  pixels while shrinking the total count. Non-glass scenes verified
- byte-identical pre/post (`scene_floor_only`, `scene_lamp_only_sphere`,
- `scene_box`). This is the current reference for future CPU/GPU parity
- work on this scene.
+  byte-identical pre/post (`scene_floor_only`, `scene_lamp_only_sphere`,
+  `scene_box`). Superseded as the current reference by the dragon
+  transmission-work rebaseline below.
+
+ **Rebaseline after the dragon transmission work (glass diffuse ×
+ (1−transmission), dragon doc Phase 2.2) — CURRENT BASELINE** — the
+ glass-sphere diffuse veil removal cleared most of the in-glass
+ divergence: same canonical mask, same method, re-measured at the
+ Phase-1 scene-key working tree (opt-in floor + background, which is
+ itself byte-identical on this scene after adding the explicit
+ `"floor": true`). — **39,875** differing pixels (5.07%), sum_abs_err
+ 275,379, max channel err 80. Masked split: inside 22,771 (15.44% of
+ the 147,504-px mask) / 219,784; outside 17,104 (2.68% of its 638,928
+ px) / 55,595; inside share 57.11%. The in-glass share collapsed from
+ 86.48% to 57.11% — the in-glass walk surface terms were the dominant
+ divergence source; the outside band (metal-shade mirror jitter) is now
+ the majority of the count. Corroborated in dragon_nextsteps.md §2.2
+ (110,021 of 110,184 change-pixels inside the glass mask for the
+ shading change itself). This is the current reference for future
+ CPU/GPU parity work on this scene.
 
  **Item-4 decision — AO does NOT attenuate specular or the mirror.**
 Baked AO (the ORM.R channel) is a hemispherical-occlusion estimate: it
@@ -795,10 +824,11 @@ method) — CURRENT:**
 - count stable vs item-4 (127,575 → 127,582); magnitude fell ~9% as the
   film-weighted lobe/mirror terms rescale the same traversal divergence.
 
-**Current glass-region share:** treat **110,453** (rendered mask,
-post-Phase-2-item-3 state) as the current glass-region share of the AE,
-superseding 110,398 (post-item-4), 110,416 (post item-3 merge) and
-111,785 (pre-item-3). As before it is a spatial count of differing
+**Current glass-region share:** treat **22,771** (rendered mask, re-measured
+at the dragon transmission-work state — see the CURRENT BASELINE entry
+above) as the current glass-region share of the AE, superseding 110,453
+(post-Phase-2-item-3), 110,398 (post-item-4), 110,416 (post item-3 merge)
+and 111,785 (pre-item-3). As before it is a spatial count of differing
 pixels in the glass-influenced region, not a causal
 traversal-only count.
 
