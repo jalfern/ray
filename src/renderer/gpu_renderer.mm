@@ -540,8 +540,18 @@ Image* render_frame_gpu(const Scene* scene) {
                   /* TexBundle's array<texture2d<float>, MAXTEX> is laid out INLINE
                      as MAXTEX consecutive texture bindings in this argument buffer
                      (encodedLength = MAXTEX * 8), so set each slot directly. */
-                  for (int i = 0; i < RAY_MAXTEX; i++) [argEnc setTexture:texArr[i] atIndex:i];
-              } else {
+                   for (int i = 0; i < RAY_MAXTEX; i++) [argEnc setTexture:texArr[i] atIndex:i];
+                   // TEMP-DBG
+                   if (getenv("RAY_TEXDBG")) {
+                       fprintf(stderr, "[texdbg] encodedLength=%lu alignment=%lu bufLen=%lu num_scene_tex=%d\n",
+                               (unsigned long)argEnc.encodedLength, (unsigned long)argEnc.alignment,
+                               (unsigned long)texArgBuf.length, scene->num_textures);
+                       const unsigned long long* words = (const unsigned long long*)texArgBuf.contents;
+                       for (int i = 0; i < RAY_MAXTEX; i++)
+                           fprintf(stderr, "[texdbg] slot[%2d]=%016llx%s\n", i,
+                                   words[i], (i < scene->num_textures) ? "  REAL" : "");
+                   }
+               } else {
                   fprintf(stderr, "[gpu] FATAL: no argument encoder for texture array (buffer 10)\n");
               }
           }
@@ -564,7 +574,11 @@ Image* render_frame_gpu(const Scene* scene) {
          [enc setBuffer:emisBuf offset:0 atIndex:8];
          [enc setBuffer:cdfBuf offset:0 atIndex:9];
             [enc setTexture:envTex atIndex:0];
-            if (texArgBuf) [enc setBuffer:texArgBuf offset:0 atIndex:10];
+             if (texArgBuf) {
+                 [enc setBuffer:texArgBuf offset:0 atIndex:10];
+                 [enc useResources:(const id<MTLResource> *)texArr count:RAY_MAXTEX usage:MTLResourceUsageRead];
+             }
+
 
          MTLSize tg = MTLSizeMake(16, 16, 1);
          MTLSize grid = MTLSizeMake(W, H, 1);
