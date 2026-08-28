@@ -20,16 +20,36 @@ static double now_sec(void) {
     return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
+static int g_backend_announced = 0;
+
 static Image* render_best(const Scene* scene) {
     if (use_gpu) {
         Image* img = render_frame_gpu(scene);
         if (img) {
+            if (!g_backend_announced) {
+                fprintf(stderr, "backend: metal\n");
+                g_backend_announced = 1;
+            }
             printf("GPU   ");
             return img;
           }
+        long st = gpu_fail_status();
+        const char* err = gpu_fail_error();
+        if (st >= 0) {
+            if (err[0])
+                fprintf(stderr, "backend: cpu (metal failed: %ld, %s)\n", st, err);
+            else
+                fprintf(stderr, "backend: cpu (metal failed: %ld)\n", st);
+        } else {
+            fprintf(stderr, "backend: cpu (metal failed: init)\n");
+        }
+        g_backend_announced = 1;
         printf("GPU unavailable, falling back to CPU\n");
         use_gpu = 0;
-      }
+      } else if (!g_backend_announced) {
+        fprintf(stderr, "backend: cpu\n");
+        g_backend_announced = 1;
+    }
     int n = num_threads > 0 ? num_threads : (int)std::thread::hardware_concurrency();
     if (n < 1) n = 1;
     printf("%dT   ", n);

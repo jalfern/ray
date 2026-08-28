@@ -166,6 +166,15 @@ static id<MTLComputePipelineState> gpu_pso = nil;
 static id<MTLFunction> gpu_fn = nil;
 static id<MTLCommandQueue> gpu_queue = nil;
 
+/* Last failure, valid after render_frame_gpu returned NULL: -1 = failed
+   before dispatch (init), otherwise the command buffer status; error is the
+   localized description ("" if none). */
+static long g_gpu_fail_status = -1;
+static char g_gpu_fail_error[256] = "";
+
+long gpu_fail_status(void) { return g_gpu_fail_status; }
+const char* gpu_fail_error(void) { return g_gpu_fail_error; }
+
 static void gpu_init_once(void) {
     if (gpu_initialized) return;
     pthread_mutex_lock(&gpu_init_mutex);
@@ -564,10 +573,18 @@ Image* render_frame_gpu(const Scene* scene) {
          [cb commit];
          [cb waitUntilCompleted];
 
-         if (cb.status != MTLCommandBufferStatusCompleted) {
-             fprintf(stderr, "[gpu] command buffer failed (status %ld)\n", (long)cb.status);
-             return NULL;
-           }
+          if (cb.status != MTLCommandBufferStatusCompleted) {
+              g_gpu_fail_status = (long)cb.status;
+              g_gpu_fail_error[0] = '\0';
+              if (cb.error) {
+                  NSString* desc = [cb.error localizedDescription];
+                  const char* utf = desc ? [desc UTF8String] : NULL;
+                  if (utf) snprintf(g_gpu_fail_error, sizeof(g_gpu_fail_error),
+                                    "%.255s", utf);
+              }
+              fprintf(stderr, "[gpu] command buffer failed (status %ld)\n", (long)cb.status);
+              return NULL;
+            }
 
           // --- Read back ---
          Image* img = create_image(W, H);
