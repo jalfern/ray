@@ -6,6 +6,7 @@
 #include <float.h>
 
 int g_gltf_debug_enabled = 0;
+int g_tri_debug = 0;
 
 /* ── Component-type name helper ─────────────────────────────── */
 static const char* ct_name(int ct) {

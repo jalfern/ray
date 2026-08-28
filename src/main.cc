@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
             if (num_threads < 1) num_threads = 1;
            }
         else if (strcmp(argv[i], "--mesh-stats") == 0) g_gltf_debug_enabled = 1;
+        else if (strcmp(argv[i], "--tri-debug") == 0) g_tri_debug = 1;
         else if (argv[i][0] != '-') scene_file = argv[i];
        }
 

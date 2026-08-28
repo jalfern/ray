@@ -6,6 +6,7 @@
 #include "bvh.h"
 #include "thin_film.h"
 #include "volume.h"
+#include "../../include/gltf_debug.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@ static int g_debug_frame_done = 0;
 
 static int g_hit_tri_tests[256] = {0};
 static int g_hit_tri_hits[256] = {0};
+static int g_tri_debug_emitted = 0;
 
 #define EPS 1e-4f
 #define AA_SAMPLES 16
@@ -96,7 +98,8 @@ static int hit_tri(V o, V d, float v0[3], float v1[3], float v2[3], float *t,
     float len1_sq = e1.x*e1.x + e1.y*e1.y + e1.z*e1.z;
     float len2_sq = e2.x*e2.x + e2.y*e2.y + e2.z*e2.z;
     float det_eps = 1e-7f * (len1_sq + len2_sq + 1e-12f) * 0.5f;
-    if (debug_mesh >= 0 && g_hit_tri_tests[debug_mesh] < 10) {
+    if (debug_mesh >= 0 && g_tri_debug && g_tri_debug_emitted < 10
+        && __sync_fetch_and_add(&g_tri_debug_emitted, 1) < 10) {
         fprintf(stderr, "[hit_tri_debug] mesh=%d tri_idx=%d  "
                 "v0=(%.10e,%.10e,%.10e) v1=(%.10e,%.10e,%.10e) v2=(%.10e,%.10e,%.10e)  "
                 "e1=(%.10e,%.10e,%.10e) e2=(%.10e,%.10e,%.10e)  det=%.10e  |det|=%e  det_eps=%e",
@@ -178,7 +181,7 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         } else {
             for (int i = node->tri_start; i < node->tri_end; i++) {
                 float ti, u, v;
-                if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
+                if (g_gltf_debug_enabled && mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
                 int dbg_mesh = (mesh_idx == 1) ? 1 : -1;
                 int dbg_tri = (mesh_idx == 1) ? i : -1;
                 if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &ti, &u, &v, dbg_mesh, dbg_tri) && ti < best_t) {
@@ -227,7 +230,7 @@ static int hit_mesh_bvh_any(V o, V d, float max_t,
         } else {
             for (int i = node->tri_start; i < node->tri_end; i++) {
                 float t, u, v;
-                if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
+                if (g_gltf_debug_enabled && mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_tests[mesh_idx]++;
                 int dbg_mesh = (mesh_idx == 1) ? 1 : -1;
                 int dbg_tri = (mesh_idx == 1) ? i : -1;
                 if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &t, &u, &v, dbg_mesh, dbg_tri) &&

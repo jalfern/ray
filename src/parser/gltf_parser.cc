@@ -1809,9 +1809,11 @@ static void build_gltf_scene(
 }
 
 int load_gltf(const char* path, GltfScene* out) {
-    fprintf(stderr, "[debug] load_gltf called with path=%s\n", path);
-    fprintf(stderr, "[debug] stderr is working\n");
-    fflush(stderr);
+    if (g_gltf_debug_enabled) {
+        fprintf(stderr, "[debug] load_gltf called with path=%s\n", path);
+        fprintf(stderr, "[debug] stderr is working\n");
+        fflush(stderr);
+    }
     memset(out, 0, sizeof(*out));
 
     char base_dir[512];
@@ -1820,10 +1822,18 @@ int load_gltf(const char* path, GltfScene* out) {
     char* last = strrchr(base_dir, '/');
     if (last) *last = '\0'; else { base_dir[0] = '.'; base_dir[1] = '\0'; }
 
-    fprintf(stderr, "[debug] about to fopen, path=[%s]\n", path ? path : "NULL");
-    fflush(stderr);
+    if (g_gltf_debug_enabled) {
+        fprintf(stderr, "[debug] about to fopen, path=[%s]\n", path ? path : "NULL");
+        fflush(stderr);
+    }
     FILE* f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "[debug] fopen FAILED for [%s]\n", path ? path : "NULL"); fflush(stderr); return -1; }
+    if (!f) {
+        if (g_gltf_debug_enabled) {
+            fprintf(stderr, "[debug] fopen FAILED for [%s]\n", path ? path : "NULL");
+            fflush(stderr);
+        }
+        return -1;
+    }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -1836,8 +1846,10 @@ int load_gltf(const char* path, GltfScene* out) {
 
     const char* cur = json;
     skip_ws_ptr(&cur);
-    { char tmp[256]; snprintf(tmp, sizeof(tmp), "[debug] json starts with: [%c] len=%ld\n", *cur ? *cur : '?', (long)sz); write(2, tmp, strlen(tmp)); }
-    fflush(stderr);
+    if (g_gltf_debug_enabled) {
+        char tmp[256]; snprintf(tmp, sizeof(tmp), "[debug] json starts with: [%c] len=%ld\n", *cur ? *cur : '?', (long)sz); write(2, tmp, strlen(tmp));
+        fflush(stderr);
+    }
 
     GltfBuffer bufs[MAX_BUFFERS];
     GltfBufferView views[MAX_VIEWS];
@@ -1864,7 +1876,7 @@ int load_gltf(const char* path, GltfScene* out) {
         char kbuf[128];
         const char* save = root;
         if (!parse_json_string(&root, kbuf, sizeof(kbuf))) { root = save; skip_value(&root); continue; }
-        fprintf(stderr, "[debug] processing key: %s\n", kbuf);
+        if (g_gltf_debug_enabled) fprintf(stderr, "[debug] processing key: %s\n", kbuf);
         skip_ws_ptr(&root);
         if (*root == ':') root++;
         skip_ws_ptr(&root);
@@ -1887,13 +1899,13 @@ int load_gltf(const char* path, GltfScene* out) {
         } else if (strcmp(kbuf, "materials") == 0) {
             nmat = parse_materials(&root, materials, MAX_MATERIALS);
         } else if (strcmp(kbuf, "images") == 0) {
-            fprintf(stderr, "[debug] parsing images array\n");
+            if (g_gltf_debug_enabled) fprintf(stderr, "[debug] parsing images array\n");
             ni = parse_images(&root, texs, MAX_IMAGES, base_dir);
-            fprintf(stderr, "[debug] parsed %d images\n", ni);
+            if (g_gltf_debug_enabled) fprintf(stderr, "[debug] parsed %d images\n", ni);
         } else if (strcmp(kbuf, "textures") == 0) {
             nt = parse_textures(&root, tex_to_img, MAX_TEXTURES);
         } else {
-            fprintf(stderr, "[debug] UNMATCHED key: %s\n", kbuf);
+            if (g_gltf_debug_enabled) fprintf(stderr, "[debug] UNMATCHED key: %s\n", kbuf);
             skip_value(&root);
         }
         skip_ws_ptr(&root);

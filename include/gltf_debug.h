@@ -9,6 +9,7 @@
 #include "bvh.h"
 
 extern int g_gltf_debug_enabled;
+extern int g_tri_debug;
 
 void gltf_debug_print(
     const GltfBuffer* bufs, int nb,

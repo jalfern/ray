@@ -498,8 +498,10 @@ Scene* parse_scene(const char* filename) {
             } else {
                 strncpy(full_path, gltf_path, sizeof(full_path) - 1);
             }
-            fprintf(stderr, "[debug] calling load_gltf with path=[%s]\n", full_path);
-            fflush(stderr);
+            if (g_gltf_debug_enabled) {
+                fprintf(stderr, "[debug] calling load_gltf with path=[%s]\n", full_path);
+                fflush(stderr);
+            }
             GltfScene gs;
             memset(&gs, 0, sizeof(gs));
             if (load_gltf(full_path, &gs) == 0 && gs.num_meshes > 0) {

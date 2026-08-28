@@ -22,6 +22,7 @@ typedef struct {
 } GltfScene;
 
 extern int g_gltf_debug_enabled;
+extern int g_tri_debug;
 
 int load_gltf(const char* path, GltfScene* out);
 void free_gltf(GltfScene* out);
