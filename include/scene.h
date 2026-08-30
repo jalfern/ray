@@ -2,6 +2,7 @@
 #define SCENE_H
 
 #include "mesh.h"
+#include <stdint.h>
 
 typedef struct {
     float x, y, z;
@@ -54,6 +55,7 @@ typedef struct {
     float att_b;
     float att_dist;
     int vol_tex_index;
+    int32_t ao_tex_index;
 } MeshObj;
 
 typedef struct {

@@ -775,6 +775,7 @@ typedef struct {
     int metallic_roughness_tex; /* texture index, -1 = none */
     int iri_tex;           /* thickness texture index, -1 = none */
     int vol_tex;           /* thicknessTexture index, -1 = none (parsed, reported only) */
+    int ao_tex;            /* occlusionTexture index, -1 = none */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1067,6 +1068,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].att_b = 1.0f;
         mats[n].att_dist = INFINITY;
         mats[n].vol_tex = -1;
+        mats[n].ao_tex = -1;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1133,6 +1135,28 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                             float fv;
                             if (strcmp(tk, "index") == 0) {
                                 if (parse_json_number(&tx, &fv)) mats[n].metallic_roughness_tex = (int)fv;
+                            } else {
+                                skip_value(&tx);
+                            }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ',') tx++;
+                        }
+                        if (*tx == '}') tx++;
+                        p = tx;
+                    } else if (strcmp(pk, "occlusionTexture") == 0) {
+                        const char* tx = p;
+                        skip_ws_ptr(&tx);
+                        if (*tx == '{') tx++;
+                        while (*tx && *tx != '}') {
+                            char tk[64];
+                            const char* tsave = tx;
+                            if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                            skip_ws_ptr(&tx);
+                            if (*tx == ':') tx++;
+                            skip_ws_ptr(&tx);
+                            float fv;
+                            if (strcmp(tk, "index") == 0) {
+                                if (parse_json_number(&tx, &fv)) mats[n].ao_tex = (int)fv;
                             } else {
                                 skip_value(&tx);
                             }
@@ -1562,6 +1586,7 @@ static void build_gltf_scene(
                 mo->att_b = 1.0f;
                 mo->att_dist = INFINITY;
                 mo->vol_tex_index = -1;
+                mo->ao_tex_index = -1;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1607,6 +1632,14 @@ static void build_gltf_scene(
                             int img_idx = tex_to_img[tex_idx];
                             if (img_idx >= 0 && img_idx < num_texs)
                                 mo->vol_tex_index = img_idx;
+                        }
+                    }
+                    if (materials[mat_idx].ao_tex >= 0) {
+                        int tex_idx = materials[mat_idx].ao_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->ao_tex_index = img_idx;
                         }
                     }
                 }
