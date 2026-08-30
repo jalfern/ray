@@ -115,6 +115,8 @@ typedef struct {
     float bg_r, bg_g, bg_b;
     float sh[12];   /* Phase 2 IBL diffuse SH (mirror of SceneGpu.sh) */
     int env_mips;   /* mip-chain length of the env texture (0 = no env) */
+    int dbg_x;      /* TEMP-DBG: pixel to log env escapes for (-1 = off) */
+    int dbg_y;
 } SceneGpu;
 
 typedef struct {
@@ -154,7 +156,7 @@ typedef struct {
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
 static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.metal");
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
-static_assert(sizeof(SceneGpu) == 124, "SceneGpu layout must match shaders.metal");
+static_assert(sizeof(SceneGpu) == 132, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 108, "MeshMatGpu layout must match shaders.metal");
 
@@ -431,9 +433,12 @@ Image* render_frame_gpu(const Scene* scene) {
           sc.exposure = scene->exposure;
           sc.width = W;
           sc.height = H;
-           sc.has_env = 0;
-           sc.env_mips = 0;
-           for (int i = 0; i < 12; i++) sc.sh[i] = 0.0f;
+            sc.has_env = 0;
+            sc.env_mips = 0;
+            sc.dbg_x = -1; sc.dbg_y = -1;   /* TEMP-DBG */
+            if (getenv("RAY_GDEBUG"))
+                sscanf(getenv("RAY_GDEBUG"), "%d %d", &sc.dbg_x, &sc.dbg_y);
+            for (int i = 0; i < 12; i++) sc.sh[i] = 0.0f;
            sc.fov_scale = tanf(scene->fov_y * 0.5f * (float)M_PI / 180.0f);
           sc.num_textures = scene->num_textures;
           sc.has_floor = scene->has_floor;
@@ -467,7 +472,12 @@ Image* render_frame_gpu(const Scene* scene) {
          id<MTLBuffer> triBuf = [gpu_device newBufferWithBytes:tris_ptr length:tri_len options:opts];
          id<MTLBuffer> bvhBuf = [gpu_device newBufferWithBytes:bvh_ptr length:bvh_len options:opts];
          id<MTLBuffer> matBuf = [gpu_device newBufferWithBytes:mats_ptr length:mat_len options:opts];
-         id<MTLBuffer> cdfBuf = [gpu_device newBufferWithBytes:cdf_ptr length:cdf_len options:opts];
+          id<MTLBuffer> cdfBuf = [gpu_device newBufferWithBytes:cdf_ptr length:cdf_len options:opts];
+          /* TEMP-DBG: env-escape log for one pixel (256 samples x 8 x 72 floats). */
+          static float dbg_zero[256 * 8 * 72];
+          id<MTLBuffer> dbgBuf = [gpu_device newBufferWithBytes:dbg_zero
+                                                          length:sizeof(dbg_zero)
+                                                         options:opts];
 
            // Real env texture from HDR file, or dummy 1x1 placeholder.
            // One load feeds both the mip-mapped texture and the IBL SH
@@ -479,10 +489,10 @@ Image* render_frame_gpu(const Scene* scene) {
                EnvMap* env = scene->env_file[0] ? envmap_load(scene->env_file, scene->env_intensity) : NULL;
                if (env && env->data) {
                    envTex = gpu_create_env_texture(gpu_device, env);
-                   if (envTex) {
-                       sc.has_env = 1;
-                       sc.env_mips = env->num_mips;
-                       for (int i = 0; i < 12; i++) sc.sh[i] = env->sh[i];
+                    if (envTex) {
+                         sc.has_env = 1;
+                         sc.env_mips = env->num_mips;
+                        for (int i = 0; i < 12; i++) sc.sh[i] = env->sh[i];
                    }
                }
                envmap_free(env);
@@ -576,6 +586,7 @@ Image* render_frame_gpu(const Scene* scene) {
             [enc setTexture:envTex atIndex:0];
              if (texArgBuf) {
                  [enc setBuffer:texArgBuf offset:0 atIndex:10];
+            [enc setBuffer:dbgBuf offset:0 atIndex:11];   /* TEMP-DBG */
                  [enc useResources:(const id<MTLResource> *)texArr count:RAY_MAXTEX usage:MTLResourceUsageRead];
              }
 
@@ -601,14 +612,58 @@ Image* render_frame_gpu(const Scene* scene) {
             }
 
           // --- Read back ---
+          if (sc.dbg_x >= 0 && sc.dbg_x < W && sc.dbg_y >= 0 && sc.dbg_y < H) {
+              const float* dbg = (const float*)dbgBuf.contents;
+              int printed = 0;
+              if (sc.dbg_x == 271 || 1) {
+                  const float* db0 = (const float*)dbgBuf.contents;
+                  int j0 = 0;   /* first record of this pixel's first escape */
+                  fprintf(stderr, "[gescdbg] level audit (0,0):");
+                  for (int ql = 0; ql < 10; ql++)
+                      fprintf(stderr, " L%d=(%.3f,%.3f,%.3f)", ql + 1,
+                              db0[j0 + 42 + ql * 3], db0[j0 + 42 + ql * 3 + 1],
+                              db0[j0 + 42 + ql * 3 + 2]);
+                  fprintf(stderr, "\n");
+              }
+              for (int s = 0; s < 256 && printed < 32; s++) {
+                  for (int k = 0; k < 8; k++) {
+                      int j = (s * 8 + k) * 72;
+                      if (dbg[j] == 0.0f && dbg[j+1] == 0.0f && dbg[j+2] == 0.0f) continue;
+                      fprintf(stderr, "[gescdbg] s=%d k=%d sr=%.4f env=(%.4f,%.4f,%.4f) | smp0f=(%.4f,%.4f,%.4f) smp5f=(%.4f,%.4f,%.4f) smp10f=(%.4f,%.4f,%.4f) | lvl1=(%.4f,%.4f,%.4f) lvl5=(%.4f,%.4f,%.4f) lvl10=(%.4f,%.4f,%.4f) off10=(%.4f,%.4f,%.4f) | pk5=(%.4f,%.4f,%.4f) nmips=%.0f\n",
+                              s, k, dbg[j+3],
+                              dbg[j+4], dbg[j+5], dbg[j+6],
+                              dbg[j+16], dbg[j+17], dbg[j+18],
+                              dbg[j+19], dbg[j+20], dbg[j+21],
+                              dbg[j+22], dbg[j+23], dbg[j+24],
+                              dbg[j+25], dbg[j+26], dbg[j+27],
+                              dbg[j+28], dbg[j+29], dbg[j+30],
+                              dbg[j+34], dbg[j+35], dbg[j+36],
+                              dbg[j+37], dbg[j+38], dbg[j+39],
+                              dbg[j+31], dbg[j+32], dbg[j+33], dbg[j+41]);
+                      printed++;
+                  }
+              }
+          }
          Image* img = create_image(W, H);
          if (!img) return NULL;
-         const float* out = (const float*)outBuf.contents;
-         for (int i = 0; i < W * H * 3; i++) {
-             float v = out[i];
-             if (v < 0.0f) v = 0.0f;
-             img->data[i] = (unsigned char)(fminf(v, 1.0f) * 255.0f);
-           }
+          const float* out = (const float*)outBuf.contents;
+          if (getenv("RAY_RAWDBG")) {
+              for (int y = 0; y < H; y++) {
+                  for (int x = 0; x < W; x++) {
+                      int j = (y * W + x) * 3;
+                      float r = out[j], g = out[j+1], b = out[j+2];
+                      int nf = (!isfinite(r) || !isfinite(g) || !isfinite(b));
+                      int big = (r > 1.5f || g > 1.5f || b > 1.5f || r < -1e-6f || g < -1e-6f || b < -1e-6f);
+                      if (nf || big)
+                          fprintf(stderr, "[rawdbg] (%d,%d) = (%.9g, %.9g, %.9g)\n", x, y, r, g, b);
+                  }
+              }
+          }
+           for (int i = 0; i < W * H * 3; i++) {
+               float v = out[i];
+               if (v < 0.0f) v = 0.0f;
+               img->data[i] = (unsigned char)(fminf(v, 1.0f) * 255.0f);
+             }
          return img;
        }
 }

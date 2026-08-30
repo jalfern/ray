@@ -25,6 +25,9 @@ static int g_tri_debug_emitted = 0;
 #define AA_SAMPLES 16
 #define MAX_DEPTH 4
 
+static float g_escdbg_dir[3] = {0, 0, 0};
+static int g_escdbg_on = 0;
+
 /* KHR_materials_volume: the absorbing medium a ray currently travels
    through.  ior 1.0 = air.  Single-slot model — the glass path already
    hardcodes the outside medium as air, so only one medium is tracked
@@ -518,6 +521,20 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     }
 
     if (hit_type == 0) {
+        static int escdbg_init = 0;
+        if (getenv("RAY_ESCDBG") && !escdbg_init) {
+            escdbg_init = 1;
+            if (sscanf(getenv("RAY_ESCDBG"), "%f %f %f",
+                       &g_escdbg_dir[0], &g_escdbg_dir[1], &g_escdbg_dir[2]) == 3) {
+                float dl = sqrtf(g_escdbg_dir[0] * g_escdbg_dir[0] +
+                                 g_escdbg_dir[1] * g_escdbg_dir[1] +
+                                 g_escdbg_dir[2] * g_escdbg_dir[2]);
+                if (dl > 0.0f) {
+                    g_escdbg_dir[0] /= dl; g_escdbg_dir[1] /= dl; g_escdbg_dir[2] /= dl;
+                    g_escdbg_on = 1;
+                }
+            }
+        }
         /* A ray leaving through the environment while inside an
            absorbing medium travels an infinite distance: T(inf) = 0. */
         if (med.ior > 1.0f &&
@@ -537,6 +554,13 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             envmap_sample_prefiltered(env, d.x, d.y, d.z, spec_rough, &er, &eg, &eb);
         else
             envmap_sample(env, d.x, d.y, d.z, &er, &eg, &eb);
+        if (g_escdbg_on) {
+            float dd = d.x * g_escdbg_dir[0] + d.y * g_escdbg_dir[1] + d.z * g_escdbg_dir[2];
+            if (dd > 0.9995f)
+                fprintf(stderr, "[escdbg] d=(%.6f,%.6f,%.6f) rough=%.4f -> (%.4f,%.4f,%.4f)\n",
+                        (double)d.x, (double)d.y, (double)d.z, (double)spec_rough,
+                        (double)er, (double)eg, (double)eb);
+        }
         return (V){er, eg, eb};
     }
 
@@ -987,6 +1011,12 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
             }
 
             V color_avg = mul(color_sum, 1.0f/sample_count);
+            if (getenv("RAY_RAWDBG") &&
+                (!isfinite((double)color_avg.x) || !isfinite((double)color_avg.y) || !isfinite((double)color_avg.z) ||
+                 color_avg.x > 1.5f || color_avg.y > 1.5f || color_avg.z > 1.5f ||
+                 color_avg.x < -1e-6f || color_avg.y < -1e-6f || color_avg.z < -1e-6f))
+                fprintf(stderr, "[rawdbg] (%d,%d) = (%.9g, %.9g, %.9g)\n",
+                        x, y, (double)color_avg.x, (double)color_avg.y, (double)color_avg.z);
             color_avg = tone_map(color_avg, ctx->exposure);
 
             size_t idx = (y * ctx->width + x) * 3;
