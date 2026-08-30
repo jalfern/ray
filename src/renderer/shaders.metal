@@ -76,9 +76,11 @@ struct SceneGpu {
     float bg_b;
     float sh[12];   /* Phase 2 IBL diffuse SH: [3][4] {c00,c1x,c1y,c1z} per channel */
     int env_mips;   /* mip-chain length of env_tex (0 = no env) */
+    int dbg_x;      /* TEMP-DBG: pixel to log env escapes for (-1 = off) */
+    int dbg_y;
 };
 
-static_assert(sizeof(SceneGpu) == 124, "SceneGpu size must match gpu_renderer.mm");
+static_assert(sizeof(SceneGpu) == 132, "SceneGpu size must match gpu_renderer.mm");
 
 struct EmissiveGpu {
     packed_float3 emitted;
