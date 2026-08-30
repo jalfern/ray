@@ -125,9 +125,10 @@ reflections unchanged).
 ./ray2 --cpu test_scenes/scene_iri_dish_small_stdout.json  # 512x467, ~20 min
 ```
 
-Scene: studio HDR @ intensity 1.0 + 3 point lights (size 0.8), no floor
-(floor-free since Phase 1) + `"background": [0,0,0]` (black void),
-1024×934 (matches the reference's 1280×1167 aspect).
+Scene: studio HDR @ intensity 1.0, env-only lighting (point lights
+removed in Phase 2), no floor (floor-free since Phase 1) +
+`"background": [0,0,0]` (black void), 1024×934 (matches the reference's
+1280×1167 aspect).
 
 - **CPU/GPU parity: RESOLVED (Phase 4).** The former 41.01%/max 109
   divergence was **not** the double-shell / medium-state hypothesis below — it
@@ -152,15 +153,19 @@ Scene: studio HDR @ intensity 1.0 + 3 point lights (size 0.8), no floor
 
 ## Delta analysis (reference vs current render, ranked by visual impact)
 
-1. **No IBL (biggest gap).** The reference is lit by the studio environment:
-   softbox highlights on the glass, the gold reading as gold, waxy diffuse
-   olives. Our backends use the envmap **only as the primary-miss
-   background**; ambient is flat `0.15 × color × AO`; specular is point
-   lights only. With the floor covering the frame, the env wasn't even
-   visible — the whole image is carried by 3 point lights + flat ambient.
-   (Phase 1 removed the floor and set the black background, so the env is
-   no longer even the backdrop — it now lights **nothing**: the IBL gap is
-   fully exposed.)
+1. **No IBL (biggest gap).** ~~The reference is lit by the studio
+   environment: softbox highlights on the glass, the gold reading as gold,
+   waxy diffuse olives. Our backends use the envmap **only as the
+   primary-miss background**; ambient is flat `0.15 × color × AO`;
+   specular is point lights only. With the floor covering the frame, the
+   env wasn't even visible — the whole image is carried by 3 point lights
+   + flat ambient. (Phase 1 removed the floor and set the black
+   background, so the env is no longer even the backdrop — it now lights
+   **nothing**: the IBL gap is fully exposed.)~~ **FIXED (Phase 2,
+   2026-08-29):** prefiltered-env specular + band-0..1 SH diffuse
+   irradiance on both backends (renderer.cc:546-556, 818-827;
+   shaders.metal:779, 810); the dish scene is env-only now (point lights
+   removed). See "Phase 2" above.
 2. **The floor is unconditional.** ~~`has_floor` is parsed (parser.cc) but
    *never read by any renderer code*; `hit_floor` (CPU) and the `hf0` floor
    branch (GPU) always run. The blue checker dominates our background and
@@ -238,24 +243,46 @@ reference (side-by-side regenerated).
 1.3 **(Separate task, do not mix in):** re-download a real `haven_01` HDR or
 switch the dragon to a real studio HDR; re-baseline the dragon render.
 
-### Phase 2 — Image-based lighting (the big one)
+### Phase 2 — Image-based lighting (the big one) — DONE 2026-08-29
 
-2.1 **Pre-filtered env for specular**: build a mip chain of the env
-(1k→mip ≈ 10 levels; roughness→mip-level mapping), sample
-linear-mip-linear in the specular lobe along H. GPU: upload as a mipmapped
-`MTLTexture` (the RGBA repack from the setup fixes already makes this
-trivial). CPU: generate the chain at load in `envmap.cc`.
-2.2 **Diffuse irradiance**: band-0..1 spherical harmonics from the env at
-load (9 coefficients, no texture dependency) → `irradiance(N)`; add
-`kd × irradiance(N) × AO` to the unified PBR term (both backends). This
-three.js-parity-grade choice is what gives the olives/gold their waxy,
-studio-lit diffuse.
-2.3 **Wiring**: point lights remain (kept for scenes that need them); for
-the dish scene, zero or dim the 3 point lights to match the reference
-(reference lighting is env-only).
-2.4 **Gate**: no env file → `has_env=0` → IBL terms are exactly zero →
-all existing baselines byte-identical (the broken haven_01 file still fails
-to load, so lamp/dragon are safe until Phase 1.3).
+2.1 **DONE: Pre-filtered env for specular.** Mip chain of the env built at
+load in `envmap.cc` (roughness→mip-level mapping);
+`envmap_sample_prefiltered` samples linear-mip-linear along the reflection
+direction. A specular/refracted ray escaping to the env sees it blurred by
+the roughness of the surface that spawned it (the traced mirror ray is the
+sampled lobe in the sharp limit — no separate env-lobe term to
+double-count); primary rays keep the sharp env (renderer.cc:546-556).
+GPU: the chain uploads as a mipmapped `MTLTexture` (`env_mips`) and
+`sample_env_prefiltered` mirrors the CPU. Without a loaded env the
+prefiltered path falls back to the sharp sample exactly (legacy).
+2.2 **DONE: Diffuse irradiance.** Band-0..1 SH from the env at load (no
+texture dependency); `envmap_irradiance` is the closed-form
+`E(N) = √π·c00 + √(π/3)·(c1·N)`. CPU: with a loaded env the flat 0.15
+ambient is replaced by `kd × irradiance(N) × AO × (1−transmission)`
+(renderer.cc:818-827); without one the legacy flat ambient is kept exactly.
+GPU: `has_env ? fl * env_irradiance_sh(ibl_sh, nf) : fl * 0.15f`
+(shaders.metal:810). This three.js-parity-grade term is what gives the
+olives/gold their waxy, studio-lit diffuse.
+2.3 **DONE: Wiring.** Point lights remain (kept for scenes that need
+them); the dish scene is now env-only — `"lights": []`, studio HDR @
+intensity 1.0 — matching the reference's env-only lighting.
+2.4 **DONE: Gate.** No env file → `has_env=0` / `!env->data` → IBL terms
+are exactly zero (specular falls back to the sharp sample, diffuse to the
+flat 0.15 ambient). **CPU half: PASSED 2026-08-29** — lamp 768×1024 and
+dragon 1024×768 CPU renders at HEAD are **byte-identical (0 differing px,
+sum_abs_err 0, max err 0)** vs 26223ae CPU renders (clean worktree build,
+`tools/ppm_diff.py`); both scenes still point at the broken
+`polyhaven_haven_01_1k.hdr`, which fails to load, so the no-env fallback
+is what was exercised. **Limitation: the GPU half cannot be run as a
+commit delta** — the Phase 4 GPU parity fix and the IBL code both landed in
+ef63cfd, so no post-Phase-4 pre-IBL commit (hence no rendered GPU
+baseline) exists, and 26223ae's GPU path predates the Phase 4
+texture-binding fix, so a 26223ae-GPU vs HEAD-GPU diff would conflate the
+two changes. Reference instead: the recorded post-Phase-4 gate (Phase
+4.2) measured CPU-vs-GPU byte-identical — lamp 768×1024 **0 px**, dragon
+1024×768 **0 px** — on a binary that already contained the IBL code; with
+the CPU side now proven unchanged vs 26223ae, the GPU no-env path follows
+by transitivity.
 
 ### Phase 3 — Normal maps (+ AO + MASK)
 
@@ -361,6 +388,19 @@ python3 tools/sidebyside.py /tmp/iri_ref.png /tmp/dish_gpu.ppm images/iri_dish_s
 # envtest/suzanne stdout, self_shadow PNG (md5) all byte-identical
 # vs the pre-change binary (/tmp/ray_pre_phase1) after adding the
 # explicit floor key
+#
+# control gate (IBL, Phase 2.4): PASSED 2026-08-29, CPU half — lamp
+# 768x1024 and dragon 1024x768 CPU renders byte-identical (0 px, sum 0,
+# max 0) vs 26223ae (clean worktree build; both scenes' broken haven_01
+# HDR still fails to load, so the no-env fallback was exercised).
+# GPU half not runnable as a commit delta: no post-Phase-4 pre-IBL commit
+# exists (IBL and the Phase 4 GPU fix both landed in ef63cfd); referenced
+# from the recorded Phase 4.2 CPU-vs-GPU 0 px numbers instead.
+# git worktree add /tmp/ray-26223ae 26223ae && make -C /tmp/ray-26223ae
+# /tmp/ray-26223ae/ray2 --cpu test_scenes/scene_lamp_stdout.json > /tmp/l2.ppm
+# ./ray2 --cpu test_scenes/scene_lamp_stdout.json > /tmp/l1.ppm
+# python3 tools/ppm_diff.py /tmp/l2.ppm /tmp/l1.ppm   # 0 px
+# (same pair for scene_dragon_stdout.json)
 ```
 
 Path gotchas (inherited): relative `gltf` paths resolve against the *scene
