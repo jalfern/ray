@@ -31,3 +31,5 @@ videos/
 .opencode/
 node_modules/
 .vite/
+
+.tmp_*.json
