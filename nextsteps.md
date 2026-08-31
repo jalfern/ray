@@ -562,9 +562,11 @@ path that the GPU lacks. Inherent to different float hardware — not fixable.
 
 ### CPU/GPU AE Baseline — scene_lamp.json (768×1024)
 
-**Status:** BASELINE ESTABLISHED — current: **39,875** differing px (see
-"Rebaseline after the dragon transmission work" near the end of this
-section). Superseded: 126,677 differing px /
+**Status:** BASELINE ESTABLISHED — current: **3.45%** cross-backend (CPU vs
+GPU). The "byte-identical" reading some docs carry for the lamp was a
+CPU-vs-CPU false positive from the Metal page fault (fixed in 83d6230); the
+39,875 px (5.07%) figure recorded below is the pre-page-fault-fix number.
+Superseded: 126,677 differing px /
 sum_abs_err 8,149,177 / max channel err 86 (masked: inside 109,548 /
 8,093,533; outside 17,129 / 55,644) — post-review-bug-fix CPU side
 binding + universal origin push ("Rebaseline after the review-bug
@@ -683,7 +685,9 @@ weights with film-weighted ones changes the residual scale of the
   transmission-work rebaseline below.
 
  **Rebaseline after the dragon transmission work (glass diffuse ×
- (1−transmission), dragon doc Phase 2.2) — CURRENT BASELINE** — the
+ (1−transmission), dragon doc Phase 2.2) — SUPERSEDED by the post-page-fault
+ 3.45% cross-backend baseline (the "byte-identical" reading was a CPU-vs-CPU
+ false positive from the Metal page fault, fixed in 83d6230)** — the
  glass-sphere diffuse veil removal cleared most of the in-glass
  divergence: same canonical mask, same method, re-measured at the
  Phase-1 scene-key working tree (opt-in floor + background, which is

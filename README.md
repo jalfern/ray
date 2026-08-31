@@ -107,8 +107,9 @@ python3 tools/ppm_diff.py /tmp/lamp_cpu.ppm /tmp/lamp_gpu.ppm \
 both renders write raw PPM to stdout (a `28T`/`GPU` prefix line precedes the
 PPM header; the diff tool scans for `P6\n`). Both backends are
 byte-deterministic, so the counts are exact, not a noise level. Current
-baseline (768×1024): **0** differing pixels — CPU and GPU are now
-byte-identical on the lamp scene, inside and outside the glass-sphere mask.
+baseline (768×1024): **3.45%** cross-backend (CPU vs GPU). The earlier
+"byte-identical" reading was a CPU-vs-CPU false positive from the Metal page
+fault (fixed in 83d6230).
 This landed with two GPU fixes: (1) a per-material texture array — the kernel
 now samples `textures[tex_index / orm_tex_index / iri_tex_index]` from an
 argument-buffer `array<texture2d<float>, MAXTEX>` (MAXTEX=64) that mirrors the

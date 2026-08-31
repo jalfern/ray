@@ -141,11 +141,12 @@ removed in Phase 2), no floor (floor-free since Phase 1) +
   CPU (`gpu_renderer.mm`, `shaders.metal`). A second GPU bug fixed alongside:
   direct-light shadow rays passed the *triangle* index as `in_shadow`'s
   `skip_mesh` (which filters by `tris[].mesh_idx`, a *mesh* index). Result at
-  256×234: **byte-identical (0 differing px)** vs CPU; the full lamp
-  (768×1024) and dragon (1024×768)   baselines are likewise byte-identical now
-  (lamp was previously 5.07%, dragon 16.11% — the shadow-index bug was the
-  glass-shadow residual). Re-measured at 512×467: the former 98,053 px /
-  41.01% / sum 4,362,327 / max 109 is now **0 / 0 / 0**.
+  256×234: the dish sits at the recorded **137 px / 0.23%** cross-backend floor
+  (not byte-identical); the full lamp (768×1024) is **3.45%** cross-backend —
+  the "byte-identical" reading recorded here was a CPU-vs-CPU false positive
+  from the Metal page fault (fixed in 83d6230); lamp was previously 5.07%.
+  Re-measured at 512×467: the former 98,053 px / 41.01% / sum 4,362,327 /
+  max 109 is now at the 0.23% floor.
 - **CPU cost**: 61M primary-sample rays at 512×467 in ~20 min. BVH counters:
   olives mesh 1.78e9 tri-tests, gold 1.74e9 per frame — glass bounces
   re-traverse the BVH very heavily. Full-res CPU is ~85 min; keep parity
