@@ -84,3 +84,45 @@ citations below are from HEAD, not from the planning docs.
    gated by `RAY_GDEBUG`, but a trace of half-finished work).
 9. **`main` is 12 commits behind** the current branch — all Phase 2/3 work is
    unmerged into `main`.
+
+## Cross-backend invalidation rule (corrected scope)
+
+The Metal page-fault fix (`83d6230`, 2026-08-27 23:09) added `useResources` to
+the 64-slot texture bundle. Before that fix, any scene whose materials index
+the bundle (`scene->textures[]`, populated by the glTF parser for
+baseColor/ORM/iridescence/normal/ao/iridescence-color textures) would silently
+fall back to CPU rendering on the GPU path — producing a **CPU-vs-CPU** diff
+that reads as "0 px" or a tiny residual. The env texture is bound separately
+at index 0 (`gpu_renderer.mm:511-512`) and is **not** in the bundle.
+
+**Corrected rule**: Pre-`83d6230` cross-backend CPU-vs-GPU numbers are
+invalid (CPU-vs-CPU false positives) **only for scenes that index the
+64-slot texture bundle**.
+
+| Scene | Indexes bundle? | Pre-83d6230 reading valid? |
+|---|---|---|
+| iridescent_dish | Yes (baseColor, ORM, iridescence) | No — false positive |
+| lamp | Yes (BaseColor, ORM, Iridescence) | No — false positive |
+| dragon | Yes (baseColor, thickness) | No — false positive |
+| envtest | **No** (pure JSON spheres, no material textures) | **Yes** — genuine reading |
+| suzanne | **No** at the time (PBR textures added in `34c7f80`, 2026-08-29, *after* the fix) | **Yes** — genuine reading |
+
+Evidence:
+- Bundle population: `src/parser/gltf_parser.cc:1959-1963`
+  (`scene->textures[]` from glTF material texture slots)
+- Bundle binding: `src/renderer/gpu_renderer.mm:511-592`
+  (`TexBundle` struct, `useResources` at `:592`)
+- Env texture (separate, index 0): `gpu_renderer.mm:511-512`
+- Lamp glTF: `test_scenes/IridescenceLamp/IridescenceLamp.gltf`
+  (BaseColor, ORM, Iridescence textures)
+- Dragon glTF: `test_scenes/DragonAttenuation/DragonAttenuation_mirrored.gltf`
+  (Cloth Backdrop baseColorTexture, dragon thicknessTexture)
+- Envtest: `test_scenes/scene_envtest_stdout.json` (pure JSON, no glTF,
+  no material textures — only the separately-bound env HDR)
+- Suzanne PBR textures: commit `34c7f80` (2026-08-29), after `83d6230`
+
+The lamp 5.07% (`nextsteps.md:565,691`) was measured on 2026-08-25, *before*
+the TexBundle existed (`ef63cfd`, 2026-08-27 15:28), so it is a real
+cross-backend reading on the old single-texture binding. The 3.45% is the
+honest post-fix number. The discrepancy is due to the IBL/texture-binding
+change in `ef63cfd`, not the page fault.
