@@ -73,6 +73,12 @@ All three were invisible in the existing asset set and are verified fixed.
    Measured on `test_scenes/scene_envtest*.json` (800×600, sky-visible,
    studio HDR): CPU/GPU diff **288,870 px (60.18%) / max 253 → 278 px
    (0.06%) / max 2** (residual = Metal linear vs manual bilinear + AA).
+   [INVALID — pre-83d6230, CPU-vs-CPU: the "278 px (0.06%) / max 2"
+   residual was recorded before the Metal page-fault fix (83d6230), when
+   the GPU silently fell back to CPU on the texture bundle, so this
+   "residual" is a false positive. The honest cross-backend number is
+   4.08% / max 255. The 60.18% pre-upload-fix figure is a real
+   cross-backend divergence (the row-pitch bug) and stands.]
 4. **Asset breakage: `envmaps/polyhaven_haven_01_1k.hdr` is an HTML page**
    (a botched download), not an HDR. It still fails to load after the fix,
    so the dragon/lamp baselines are **unchanged** by items 1–3 (same
@@ -283,7 +289,10 @@ two changes. Reference instead: the recorded post-Phase-4 gate (Phase
 4.2) measured CPU-vs-GPU byte-identical — lamp 768×1024 **0 px**, dragon
 1024×768 **0 px** — on a binary that already contained the IBL code; with
 the CPU side now proven unchanged vs 26223ae, the GPU no-env path follows
-by transitivity.
+by transitivity. [INVALID — pre-83d6230, CPU-vs-CPU: the Phase 4.2
+"CPU-vs-GPU byte-identical" reading was a false positive from the Metal
+page fault, so this transitivity step is unsound. Honest cross-backend
+numbers: lamp 3.45%, dragon 5.94%.]
 
 ### Phase 3 — Normal maps (+ AO + MASK)
 
@@ -333,6 +342,12 @@ Gate (CPU vs GPU, this binary): dish 256×234 **and 512×467 0 px**, lamp 768×1
 (masked glass-sphere region 0/0), dragon 1024×768 **0 px**, envtest unchanged
 0.06%/max 2, suzanne 14.23%→13.84% (pre-existing procedural-path gap, unrelated
 to textures, marginally improved). README parity table rebaselined.
+[INVALID — pre-83d6230, CPU-vs-CPU: this gate was recorded before the Metal
+page-fault fix, so the "0 px" readings for dish/lamp/dragon and the "envtest
+0.06%" are false positives (the GPU silently fell back to CPU). Honest
+cross-backend numbers: dish 0.23%, lamp 3.45%, dragon 5.94%, envtest 4.08%.
+The suzanne 13.84% is a genuine cross-backend number (the procedural-path gap
+is real and unrelated to the page fault); the honest HEAD figure is 13.88%.]
 
 ### Phase 5 — Iridescence color lobe
 
@@ -367,10 +382,15 @@ make
 ./ray2 --cpu test_scenes/scene_iri_dish_small_stdout.json > /tmp/dish_cpu.ppm
 ./ray2 test_scenes/scene_iri_dish_small_stdout.json        > /tmp/dish_gpu.ppm
 
-# CPU/GPU parity (Phase 4 resolved: dish 256x234 / lamp / dragon are byte-identical)
+# CPU/GPU parity. NOTE: the "Phase 4 resolved: dish 256x234 / lamp / dragon
+# are byte-identical" reading was a pre-83d6230 CPU-vs-CPU false positive from
+# the Metal page fault. Honest cross-backend numbers: dish 0.23%, lamp 3.45%,
+# dragon 5.94%.
 python3 tools/ppm_diff.py /tmp/dish_cpu.ppm /tmp/dish_gpu.ppm
 
-# env path sanity (should stay ~0.06% / max 2 after the upload fix)
+# env path sanity. NOTE: the "~0.06% / max 2" expectation was a pre-83d6230
+# CPU-vs-CPU false positive from the Metal page fault; the honest
+# cross-backend number is 4.08% / max 255.
 ./ray2 --cpu test_scenes/scene_envtest_stdout.json > /tmp/e_cpu.ppm
 ./ray2 test_scenes/scene_envtest_stdout.json        > /tmp/e_gpu.ppm
 python3 tools/ppm_diff.py /tmp/e_cpu.ppm /tmp/e_gpu.ppm
@@ -397,6 +417,10 @@ python3 tools/sidebyside.py /tmp/iri_ref.png /tmp/dish_gpu.ppm images/iri_dish_s
 # GPU half not runnable as a commit delta: no post-Phase-4 pre-IBL commit
 # exists (IBL and the Phase 4 GPU fix both landed in ef63cfd); referenced
 # from the recorded Phase 4.2 CPU-vs-GPU 0 px numbers instead.
+# NOTE: that reference is unsound — the Phase 4.2 "CPU-vs-GPU 0 px" numbers
+# were a pre-83d6230 CPU-vs-CPU false positive from the Metal page fault, so
+# the GPU no-env path does NOT follow by transitivity. Honest cross-backend
+# numbers: lamp 3.45%, dragon 5.94%.
 # git worktree add /tmp/ray-26223ae 26223ae && make -C /tmp/ray-26223ae
 # /tmp/ray-26223ae/ray2 --cpu test_scenes/scene_lamp_stdout.json > /tmp/l2.ppm
 # ./ray2 --cpu test_scenes/scene_lamp_stdout.json > /tmp/l1.ppm
