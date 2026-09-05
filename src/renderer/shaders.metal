@@ -285,6 +285,7 @@ static float3 env_procedural(float3 d) {
     float sun = pow(max(d.y, 0.0f), 64.0f) * 4.0f;
     float cloud = pow(max(0.2f + 0.8f * sin(d.x * 12.0f + d.z * 8.0f) * sin(d.z * 10.0f - d.x * 6.0f), 0.0f), 2.0f) * 0.3f;
     float3 col = float3(sky_r + sun + cloud, sky_g + sun * 0.8f + cloud, sky_b + sun * 0.4f + cloud);
+    col = min(col, 1.0f);
     col *= 0.3f + 0.7f * max(d.y, 0.0f);
     return col;
 }
