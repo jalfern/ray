@@ -8,7 +8,7 @@
     {"pos": [0, 1, -2], "size": 1.0}
   ],
   "environment": {
-    "file": "envmaps/polyhaven_haven_01_1k.hdr",
+    "file": "envmaps/polyhaven_studio_small_03_1k.hdr",
     "intensity": 4.0
   },
   "output": "images/dragon_orig_test.png",

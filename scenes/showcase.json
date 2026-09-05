@@ -5,7 +5,7 @@
   "height": 1080,
   "exposure": 2.0,
 
-  "environment": {"file": "../envmaps/polyhaven_haven_01_1k.hdr", "intensity": 1.0},
+  "environment": {"file": "../envmaps/polyhaven_studio_small_03_1k.hdr", "intensity": 1.0},
 
   "meshes": [
     {
