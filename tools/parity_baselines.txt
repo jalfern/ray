@@ -17,6 +17,20 @@
  # pixels at err>=128 (max 1/27/53/80); envtest had 2659 (13.6%) — that was the
  # known-bug env-sampling divergence, since fixed (GPU prefiltered path now reads
  # the CPU mip chain from a buffer; envtest re-baselined to ok, max 3).
+#
+# 2026-09-05: envmaps/polyhaven_haven_01_1k.hdr had been a 404 HTML page since July.
+# envmap_load returned NULL and the call site never checked it, so 11 scenes (incl.
+# lamp + dragon) silently rendered the procedural env. Now fails loud. Lamp and
+# dragon floors below are the first measured through a REAL envmap.
+# CAVEAT: the haven file is currently a symlink to polyhaven_studio_small_03_1k as a
+# placeholder. If the real haven HDR is restored, both must be re-measured.
+#
+# max_channel_err overstates both scenes -- the tail is a few isolated pixels:
+#   lamp:   max=64,  5 px >=16, clustered ~(351,908); 8459/8627 differ by exactly 1
+#   dragon: max=205, 5 px >=64 (2 >=128), scattered x101-447 y165-195; 99.89% <=16
+# Both look like caustic fireflies (one backend takes a TIR branch the other does
+# not), not structural divergence. Dragon is recorded known-bug only because 205
+# exceeds FLOOR_MAX. A percentile metric (p99.9) would read 8 and 2 respectively.
 ok	test_scenes/scene_iri_dish_parity256.json	137	147	1
 ok	test_scenes/scene_suzanne_stdout.json	66642	366309	27
 known-bug	test_scenes/scene_dragon_stdout.json	23353	54186	205
