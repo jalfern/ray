@@ -26,7 +26,7 @@ gate (see "Render parity" below).
 - `make volcheck` runs the KHR_materials_volume math parity check — needs `node` (`tools/vol_ref_check.mjs`).
 - `test_scenes/lamp_glass_mask.ppm` is committed (`*.ppm` is gitignored; it was force-added). Use the committed file, do not regenerate it.
 - `make models` regenerates the procedural meshes in `models/` — regenerate, never hand-edit.
-- Working plan docs are the record of project state (rebaseline history, open bugs): `iridescent_dish_nextsteps.md` (active plan), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps".
+- Working plan docs are the record of project state (rebaseline history, open bugs): `glass_parity_nextsteps.md` (next work item — glass light-transport CPU/GPU divergence), `iridescent_dish_nextsteps.md` (active feature plan), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps".
 
 ## Render parity (Tier 1 gate)
 

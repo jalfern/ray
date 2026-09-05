@@ -123,7 +123,12 @@ nextsteps.md.)
 
 ## Next Steps
 
-Three plan documents, newest first:
+**Next work item:** [glass_parity_nextsteps.md](glass_parity_nextsteps.md) —
+close the glass light-transport CPU/GPU divergence (recursive vs iterative
+traversal) driving the lamp (3.45%) and dragon (5.94%) parity floors. The
+envtest bug (the last `known-bug`) is fixed; the full gate is green.
+
+Other plan documents, newest first:
 
 - [iridescent_dish_nextsteps.md](iridescent_dish_nextsteps.md) — the active
   plan, anchored on **IridescentDishWithOlives** (IBL, normal maps, MASK,
