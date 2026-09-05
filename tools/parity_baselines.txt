@@ -22,8 +22,9 @@
 # envmap_load returned NULL and the call site never checked it, so 11 scenes (incl.
 # lamp + dragon) silently rendered the procedural env. Now fails loud. Lamp and
 # dragon floors below are the first measured through a REAL envmap.
-# CAVEAT: the haven file is currently a symlink to polyhaven_studio_small_03_1k as a
-# placeholder. If the real haven HDR is restored, both must be re-measured.
+# The lamp/dragon parity scenes now name polyhaven_studio_small_03_1k directly.
+# The haven path elsewhere is a placeholder symlink to the same file; the other 9
+# scenes referencing it still need a decision (restore the real HDR, or repoint).
 #
 # max_channel_err overstates both scenes -- the tail is a few isolated pixels:
 #   lamp:   max=64,  5 px >=16, clustered ~(351,908); 8459/8627 differ by exactly 1
