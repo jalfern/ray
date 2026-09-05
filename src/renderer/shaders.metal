@@ -76,11 +76,12 @@ struct SceneGpu {
     float bg_b;
     float sh[12];   /* Phase 2 IBL diffuse SH: [3][4] {c00,c1x,c1y,c1z} per channel */
     int env_mips;   /* mip-chain length of env_tex (0 = no env) */
+    int env_w, env_h;  /* base env dimensions (for buffer-based prefiltered read) */
     int dbg_x;      /* TEMP-DBG: pixel to log env escapes for (-1 = off) */
     int dbg_y;
 };
 
-static_assert(sizeof(SceneGpu) == 132, "SceneGpu size must match gpu_renderer.mm");
+static_assert(sizeof(SceneGpu) == 140, "SceneGpu size must match gpu_renderer.mm");
 
 struct EmissiveGpu {
     packed_float3 emitted;
@@ -197,29 +198,69 @@ static float3 sample_envmap(texture2d<float> env_tex, float3 d) {
     return env_tex.sample(sampler(filter::linear, address::repeat), float2(u, v)).rgb;
 }
 
+/* Phase 2 IBL: bilinear over one equirect mip level, x and y wrap
+   (periodic).  Reads the CPU-built mip chain from a device buffer
+   (mip is the packed chain, base_w/base_h the level-0 size).  Mirrors
+   the CPU's envmap.cc sample_level_data operation-for-operation
+   (u*w-0.5 texel-center offset, floor, wrap, 4-texel lerp).  Used
+   because this MSL's sample(sampler,coord,lod) explicit-LOD overload
+   samples the wrong level and sample_level / read(int2,level) are
+   unavailable. */
+ static float3 env_bilinear_read(device const float* mip, int base_w, int base_h,
+                                  int level, float u, float v) {
+     int w = base_w >> level; if (w < 1) w = 1;
+     int h = base_h >> level; if (h < 1) h = 1;
+     int offset = 0;
+     for (int i = 0; i < level; i++) {
+         int wi = base_w >> i; if (wi < 1) wi = 1;
+         int hi = base_h >> i; if (hi < 1) hi = 1;
+         offset += wi * hi * 3;
+     }
+     device const float* data = mip + offset;
+     float fx = u * (float)w - 0.5f;
+     float fy = v * (float)h - 0.5f;
+     int ix = (int)floor(fx);
+     int iy = (int)floor(fy);
+     float tx = fx - (float)ix;
+     float ty = fy - (float)iy;
+     ix = ((ix % w) + w) % w;
+     iy = ((iy % h) + h) % h;
+     int ix1 = (ix + 1) % w;
+     int iy1 = (iy + 1) % h;
+     device const float* p00 = data + (iy * w + ix) * 3;
+     device const float* p10 = data + (iy * w + ix1) * 3;
+     device const float* p01 = data + (iy1 * w + ix) * 3;
+     device const float* p11 = data + (iy1 * w + ix1) * 3;
+     float wx0 = 1.0f - tx, wx1 = tx;
+     float wy0 = 1.0f - ty, wy1 = ty;
+     float3 r;
+     r.x = (p00[0] * wx0 + p10[0] * wx1) * wy0 + (p01[0] * wx0 + p11[0] * wx1) * wy1;
+     r.y = (p00[1] * wx0 + p10[1] * wx1) * wy0 + (p01[1] * wx0 + p11[1] * wx1) * wy1;
+     r.z = (p00[2] * wx0 + p10[2] * wx1) * wy0 + (p01[2] * wx0 + p11[2] * wx1) * wy1;
+     return r;
+ }
+
 /* Phase 2 IBL: the env blurred by a surface's roughness, for a
    specular/refracted ray escaping to the environment.  roughness in
    [0,1] maps onto the mip chain the CPU built in envmap.cc
    (roughness * maxLevelOfDetail); linear-mip-linear between the
    bracketing levels, bilinear within a level — the same algorithm as
-   the CPU's envmap_sample_prefiltered (mip levels were uploaded from
-   the CPU-built chain, so only the within-level bilinear differs:
-   hardware vs manual, the pre-existing env-path parity class). */
-static float3 sample_env_prefiltered(texture2d<float> env_tex, float3 d, float rough,
-                                     int env_mips) {
-    float u = atan2(d.z, d.x) * (0.5f / M_PI_F) + 0.5f;
-    float v = acos(clamp(d.y, -1.0f, 1.0f)) * (1.0f / M_PI_F);
-    int maxlod = env_mips - 1;   /* must match the CPU's env->num_mips - 1 */
-    float lod = clamp(rough, 0.0f, 1.0f) * (float)maxlod;
-    int l0 = (int)floor(lod);
-    if (l0 > maxlod) l0 = maxlod;
-    float f = lod - (float)l0;
-    int l1 = min(l0 + 1, maxlod);
-    sampler smp(filter::linear, address::repeat);
-    float4 c0 = env_tex.sample(smp, float2(u, v), l0);
-    float4 c1 = env_tex.sample(smp, float2(u, v), l1);
-    return c0.rgb + (c1.rgb - c0.rgb) * f;
-}
+   the CPU's envmap_sample_prefiltered.  mip is the packed CPU mip chain
+   (see env_bilinear_read); env_w/env_h are the level-0 dimensions. */
+ static float3 sample_env_prefiltered(device const float* mip, int env_w, int env_h,
+                                       float3 d, float rough, int env_mips) {
+     float u = atan2(d.z, d.x) * (0.5f / M_PI_F) + 0.5f;
+     float v = acos(clamp(d.y, -1.0f, 1.0f)) * (1.0f / M_PI_F);
+     int maxlod = env_mips - 1;   /* must match the CPU's env->num_mips - 1 */
+     float lod = clamp(rough, 0.0f, 1.0f) * (float)maxlod;
+     int l0 = (int)floor(lod);
+     if (l0 > maxlod) l0 = maxlod;
+     float f = lod - (float)l0;
+     int l1 = min(l0 + 1, maxlod);
+     float3 c0 = env_bilinear_read(mip, env_w, env_h, l0, u, v);
+     float3 c1 = env_bilinear_read(mip, env_w, env_h, l1, u, v);
+     return c0 + (c1 - c0) * f;
+ }
 
 /* Phase 2 IBL: band-0..1 SH diffuse irradiance, the closed-form
    hemispherical integral  E(N) = sqrt(pi)*c00 + sqrt(pi/3)*(c1 . N).
@@ -652,6 +693,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         int sample_idx, int num_textures,
                         texture2d<float> env_tex, int has_env,
                         constant const float* ibl_sh, int env_mips,
+                        device const float* env_mip, int env_w, int env_h,
                         const device TexBundle& scene_tex,
                         int has_floor, int has_bg_color,
                         float bg_r, float bg_g, float bg_b) {
@@ -775,10 +817,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                    roughness (the traced mirror is the sampled lobe in the
                    sharp limit — no separate env-lobe term); primary rays
                    (sr < 0) keep the sharp env. */
-                float3 env_col = has_bg_color ? float3(bg_r, bg_g, bg_b)
-                               : (has_env ? (sr >= 0.0f ? sample_env_prefiltered(env_tex, rd, sr, env_mips)
-                                                        : sample_envmap(env_tex, rd))
-                                          : env_procedural(rd));
+                 float3 env_col = has_bg_color ? float3(bg_r, bg_g, bg_b)
+                                : (has_env ? (sr >= 0.0f ? sample_env_prefiltered(env_mip, env_w, env_h, rd, sr, env_mips)
+                                                         : sample_envmap(env_tex, rd))
+                                           : env_procedural(rd));
                 /* Infinite path in an absorbing medium: photon fully absorbed. */
                 if (in_med && vol_sigma_nonzero(float3(mid_c.y, mid_c.z, mid_c.w), mid_d))
                     break;
@@ -1168,6 +1210,7 @@ kernel void rk(
     device const float* emissive_cdf [[buffer(9)]],
     texture2d<float> env_tex [[texture(0)]],
     const device TexBundle& scene_tex [[buffer(10)]],
+    device const float* env_mip [[buffer(12)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -1206,11 +1249,12 @@ kernel void rk(
                              lights, scene.num_lights,
                              emissive, scene.num_emissive,
                              emissive_cdf, scene.num_emissive_cdf,
-                               sidx, scene.num_textures,
-                               env_tex, scene.has_env, scene.sh, scene.env_mips,
-                               scene_tex,
-                               scene.has_floor, scene.has_bg_color,
-                               scene.bg_r, scene.bg_g, scene.bg_b);
+                                sidx, scene.num_textures,
+                                env_tex, scene.has_env, scene.sh, scene.env_mips,
+                                env_mip, scene.env_w, scene.env_h,
+                                scene_tex,
+                                scene.has_floor, scene.has_bg_color,
+                                scene.bg_r, scene.bg_g, scene.bg_b);
         }
     }
     float3 final = sum / (float)(AA_SAMPLES * AA_SAMPLES);

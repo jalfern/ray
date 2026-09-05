@@ -1,5 +1,33 @@
 # AGENTS.md
 
+macOS ray tracer (`./ray2`) with parallel CPU and Metal GPU backends, glTF/OBJ
+import. Correctness is measured, not eyeballed: CPU/GPU pixel parity is the
+gate (see "Render parity" below).
+
+## Build and run
+
+- macOS-only C++11 (`g++`, links Metal/Foundation/zlib); no package manager, `include/stb_image.h` is vendored.
+- `make` → `./ray2`. `make run` renders `scenes/scene.json`. `make test` renders six smoke scenes (runs only — no assertions).
+- Backend is GPU-first with loud CPU fallback. `--cpu` forces CPU; also `--threads N`, `--mesh-stats`, `--tri-debug`.
+- Scene JSON: `mesh`/`gltf` paths resolve relative to the scene file's directory; `environment.file` resolves relative to the **CWD** — run from the repo root.
+- glTF test models and the `*_stdout.json` parity scenes live in `test_scenes/`, not `scenes/`.
+- A scene without an `"output"` key writes raw PPM to stdout, preceded by a `GPU`/`28T` prefix line; `tools/ppm_diff.py` scans for `P6\n`.
+
+## CPU/GPU mirror — read before touching any shading term
+
+- `include/thin_film.h` and `include/volume.h` are the source of record for **both** backends; `src/renderer/shaders.metal` is a line-for-line / operation-for-operation MSL port. A shading change must be edited on both sides or parity breaks.
+- GPU buffer structs (`SphereGpu`, `SceneGpu`, …) are duplicated between `gpu_renderer.mm` and `shaders.metal` with `static_assert` on sizes in the `.mm`. Change both sides and the asserts together. `MAXTEX`/`RAY_MAXTEX` = 64 must match in both files.
+- `shaders.metal` is embedded as a C string into `build/renderer/shader_src.h` and compiled at runtime (`newLibraryWithSource`) — no `metal` CLI needed, but shader edits require a rebuild.
+- `web_viewer/` is a separate Vite+TypeScript+three.js app (`npm run dev` there); its `node_modules/three` shader chunks are the reference model for the thin-film/volume ports.
+
+## Testing and parity
+
+- `tools/parity.sh [SCENE ...]` is the CPU/GPU gate; it does not build — run `make` first. With no args it gates the default set (iri dish 256 + envtest). The no-arg gate PASSES at HEAD. (envtest was the lone `known-bug` — a GPU env-sampling divergence, max_channel_err=255 — fixed 2026-09-04 by reading the CPU mip chain from a buffer in the prefiltered path; re-baselined to `ok`, max 3. See `iridescent_dish_nextsteps.md`.)
+- `make volcheck` runs the KHR_materials_volume math parity check — needs `node` (`tools/vol_ref_check.mjs`).
+- `test_scenes/lamp_glass_mask.ppm` is committed (`*.ppm` is gitignored; it was force-added). Use the committed file, do not regenerate it.
+- `make models` regenerates the procedural meshes in `models/` — regenerate, never hand-edit.
+- Working plan docs are the record of project state (rebaseline history, open bugs): `iridescent_dish_nextsteps.md` (active plan), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps".
+
 ## Render parity (Tier 1 gate)
 
 Two different bars — never conflate them:

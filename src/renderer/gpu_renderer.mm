@@ -73,9 +73,32 @@ static id<MTLTexture> gpu_create_env_texture(id<MTLDevice> device, EnvMap* env) 
         }
         [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:l
                   withBytes:rgba bytesPerRow:(NSUInteger)w * 4 * sizeof(float)];
-        free(rgba);
+         free(rgba);
+     }
+     return tex;
+}
+
+/* Pack the CPU-built mip chain (env->mips[l], RGB) into a single device
+   buffer, level 0 first, for the shader's manual bilinear prefiltered read
+   (env_bilinear_read).  This MSL's sample(sampler,coord,lod) explicit-LOD
+   overload samples the wrong level and sample_level / read(int2,level) are
+   unavailable, so the prefiltered path reads the chain from a buffer instead
+   of the mipmapped texture.  The texture is still used for the sharp path. */
+static id<MTLBuffer> gpu_create_env_mip_buffer(id<MTLDevice> device, EnvMap* env) {
+    if (!env || !env->data || env->num_mips < 1) return nil;
+    size_t total = 0;
+    for (int l = 0; l < env->num_mips; l++)
+        total += (size_t)env->mip_w[l] * env->mip_h[l] * 3;
+    id<MTLBuffer> buf = [device newBufferWithLength:total * sizeof(float)
+                                             options:MTLResourceStorageModeShared];
+    if (!buf) return nil;
+    float* dst = (float*)buf.contents;
+    for (int l = 0; l < env->num_mips; l++) {
+        size_t npx = (size_t)env->mip_w[l] * env->mip_h[l];
+        memcpy(dst, env->mips[l], npx * 3 * sizeof(float));
+        dst += npx * 3;
     }
-    return tex;
+    return buf;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +138,7 @@ typedef struct {
     float bg_r, bg_g, bg_b;
     float sh[12];   /* Phase 2 IBL diffuse SH (mirror of SceneGpu.sh) */
     int env_mips;   /* mip-chain length of the env texture (0 = no env) */
+    int env_w, env_h;  /* base env dimensions (for buffer-based prefiltered read) */
     int dbg_x;      /* TEMP-DBG: pixel to log env escapes for (-1 = off) */
     int dbg_y;
 } SceneGpu;
@@ -157,7 +181,7 @@ typedef struct {
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
 static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.metal");
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
-static_assert(sizeof(SceneGpu) == 132, "SceneGpu layout must match shaders.metal");
+static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 112, "MeshMatGpu layout must match shaders.metal");
 
@@ -486,19 +510,23 @@ Image* render_frame_gpu(const Scene* scene) {
            // coefficients in SceneGpu (the CPU renderer loads the same
            // file through the same envmap_load, so SH values and mip
            // chains are bit-identical across backends).
-           id<MTLTexture> envTex = nil;
-           {
-               EnvMap* env = scene->env_file[0] ? envmap_load(scene->env_file, scene->env_intensity) : NULL;
-               if (env && env->data) {
-                   envTex = gpu_create_env_texture(gpu_device, env);
-                    if (envTex) {
-                         sc.has_env = 1;
-                         sc.env_mips = env->num_mips;
-                        for (int i = 0; i < 12; i++) sc.sh[i] = env->sh[i];
-                   }
-               }
-               envmap_free(env);
-           }
+            id<MTLTexture> envTex = nil;
+            id<MTLBuffer> envMipBuf = nil;
+            {
+                EnvMap* env = scene->env_file[0] ? envmap_load(scene->env_file, scene->env_intensity) : NULL;
+                if (env && env->data) {
+                    envTex = gpu_create_env_texture(gpu_device, env);
+                    envMipBuf = gpu_create_env_mip_buffer(gpu_device, env);
+                     if (envTex) {
+                          sc.has_env = 1;
+                          sc.env_mips = env->num_mips;
+                          sc.env_w = env->w;
+                          sc.env_h = env->h;
+                         for (int i = 0; i < 12; i++) sc.sh[i] = env->sh[i];
+                    }
+                }
+                envmap_free(env);
+            }
            if (!envTex) {
                MTLTextureDescriptor* td =
                 [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
@@ -585,12 +613,13 @@ Image* render_frame_gpu(const Scene* scene) {
          [enc setBuffer:lightBuf offset:0 atIndex:7];
          [enc setBuffer:emisBuf offset:0 atIndex:8];
          [enc setBuffer:cdfBuf offset:0 atIndex:9];
-            [enc setTexture:envTex atIndex:0];
-             if (texArgBuf) {
-                 [enc setBuffer:texArgBuf offset:0 atIndex:10];
-            [enc setBuffer:dbgBuf offset:0 atIndex:11];   /* TEMP-DBG */
-                 [enc useResources:(const id<MTLResource> *)texArr count:RAY_MAXTEX usage:MTLResourceUsageRead];
-             }
+             [enc setTexture:envTex atIndex:0];
+             if (envMipBuf) [enc setBuffer:envMipBuf offset:0 atIndex:12];
+              if (texArgBuf) {
+                  [enc setBuffer:texArgBuf offset:0 atIndex:10];
+             [enc setBuffer:dbgBuf offset:0 atIndex:11];   /* TEMP-DBG */
+                  [enc useResources:(const id<MTLResource> *)texArr count:RAY_MAXTEX usage:MTLResourceUsageRead];
+              }
 
 
          MTLSize tg = MTLSizeMake(16, 16, 1);

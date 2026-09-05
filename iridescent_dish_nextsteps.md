@@ -155,10 +155,41 @@ removed in Phase 2), no floor (floor-free since Phase 1) +
   from the Metal page fault (fixed in 83d6230); lamp was previously 5.07%.
   Re-measured at 512×467: the former 98,053 px / 41.01% / sum 4,362,327 /
   max 109 is now at the 0.23% floor.
-- **CPU cost**: 61M primary-sample rays at 512×467 in ~20 min. BVH counters:
-  olives mesh 1.78e9 tri-tests, gold 1.74e9 per frame — glass bounces
-  re-traverse the BVH very heavily. Full-res CPU is ~85 min; keep parity
-  checks ≤512 and use the GPU for looks.
+ - **CPU cost**: 61M primary-sample rays at 512×467 in ~20 min. BVH counters:
+   olives mesh 1.78e9 tri-tests, gold 1.74e9 per frame — glass bounces
+   re-traverse the BVH very heavily. Full-res CPU is ~85 min; keep parity
+   checks ≤512 and use the GPU for looks.
+
+## envtest CPU/GPU divergence fixed (2026-09-04)
+
+The lone failing parity gate — `scene_envtest_stdout.json` recorded
+`known-bug` (4.08% / max 255, a regression from the Phase 2 IBL commit) — is
+now fixed and re-baselined to `ok` (0.13% / max 3). The no-arg gate PASSES.
+
+**Root cause.** The GPU's prefiltered env path used
+`env_tex.sample(sampler, coord, lod)` to pick the roughness-blurred mip level.
+On this MSL (macOS 26.6 / Metal 4) that explicit-LOD overload samples the
+**wrong level** — it returns sharp level-0 data instead of the requested blurred
+level (the texture itself is correct; a `getBytes` read-back of level 10 matched
+the CPU's 1×1 average exactly). The alternatives are unavailable in this MSL:
+`sample_level`, `read(int2, level)`, and `sample(s, coord, grad)` all fail to
+compile ("no matching member function"). So metallic/plastic IBL rays escaped to
+the wrong (sharp) level while the CPU sampled the correct blurred one. Isolated
+with a single-sphere scene: CPU gold sphere uniform (the level-10 average × F0
+tint), GPU non-uniform (sharp).
+
+**Fix.** The GPU now reads the CPU-built mip chain from a **device buffer** and
+does the within-level bilinear by hand (`env_bilinear_read` in `shaders.metal`),
+mirroring the CPU's `envmap.cc sample_level_data` operation-for-operation
+(`u*w-0.5` texel-center offset, floor, wrap, 4-texel lerp). `gpu_renderer.mm`
+packs the chain into the buffer (`gpu_create_env_mip_buffer`, level 0 first);
+`SceneGpu` gained `env_w`/`env_h` (132→140 bytes, asserted both sides); the
+buffer is bound at `buffer(12)`. The mipmapped texture is still used for the
+sharp (primary-ray) path, which was never affected.
+
+**Result.** envtest 4.08%/max 255 → **0.13%/max 3** (residual = the normal
+float-rounding floor). All other scenes (dish, suzanne, dragon, lamp) unchanged
+at their exact baselines — the change is isolated to the env-sampling path.
 
 ## Delta analysis (reference vs current render, ranked by visual impact)
 
@@ -393,9 +424,9 @@ python3 tools/ppm_diff.py /tmp/dish_cpu.ppm /tmp/dish_gpu.ppm
 
 # env path sanity. NOTE: the envtest scene carries no material textures, so
 # it did NOT index the 64-slot bundle and was NOT masked by the Metal page
-# fault — the "~0.06% / max 2" was a genuine (if since-superseded)
-# cross-backend reading, not a CPU-vs-CPU false positive. The honest HEAD
-# number is 4.08% / max 255.
+# fault. The old 4.08% / max 255 divergence (the GPU's broken explicit-LOD
+# env sample) is fixed 2026-09-04 — the honest HEAD number is now ~0.13% /
+# max 3 (the float-rounding floor); see "envtest CPU/GPU divergence fixed".
 ./ray2 --cpu test_scenes/scene_envtest_stdout.json > /tmp/e_cpu.ppm
 ./ray2 test_scenes/scene_envtest_stdout.json        > /tmp/e_gpu.ppm
 python3 tools/ppm_diff.py /tmp/e_cpu.ppm /tmp/e_gpu.ppm

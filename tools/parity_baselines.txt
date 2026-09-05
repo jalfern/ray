@@ -13,10 +13,12 @@
 # max_channel_err <= FLOOR_MAX, else "known-bug". FLOOR_MAX (see parity.sh) is the
 # "no near-full-range pixel" bar: a legitimate floor never puts a pixel at
 # >=128/255 in any channel, but a real structural bug (one backend black where the
-# other is bright) does. Measured 2026-08-31: dish/suzanne/dragon/lamp have ZERO
-# pixels at err>=128 (max 1/27/53/80); envtest has 2659 (13.6%).
+ # other is bright) does. Measured 2026-08-31: dish/suzanne/dragon/lamp have ZERO
+ # pixels at err>=128 (max 1/27/53/80); envtest had 2659 (13.6%) — that was the
+ # known-bug env-sampling divergence, since fixed (GPU prefiltered path now reads
+ # the CPU mip chain from a buffer; envtest re-baselined to ok, max 3).
 ok	test_scenes/scene_iri_dish_parity256.json	137	147	1
 ok	test_scenes/scene_suzanne_stdout.json	66642	366309	27
 ok	test_scenes/scene_dragon_stdout.json	46688	185981	53
 ok	test_scenes/scene_lamp_stdout.json	27166	167753	80
-known-bug	test_scenes/scene_envtest_stdout.json	19603	1774119	255
+ok	test_scenes/scene_envtest_stdout.json	629	1083	3
