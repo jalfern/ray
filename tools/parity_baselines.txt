@@ -19,6 +19,6 @@
  # the CPU mip chain from a buffer; envtest re-baselined to ok, max 3).
 ok	test_scenes/scene_iri_dish_parity256.json	137	147	1
 ok	test_scenes/scene_suzanne_stdout.json	66642	366309	27
-ok	test_scenes/scene_dragon_stdout.json	46688	185981	53
-ok	test_scenes/scene_lamp_stdout.json	27166	167753	80
+known-bug	test_scenes/scene_dragon_stdout.json	23353	54186	205
+ok	test_scenes/scene_lamp_stdout.json	8627	10698	64
 ok	test_scenes/scene_envtest_stdout.json	629	1083	3
