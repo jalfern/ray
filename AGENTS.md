@@ -22,11 +22,12 @@ gate (see "Render parity" below).
 
 ## Testing and parity
 
-- `tools/parity.sh [SCENE ...]` is the CPU/GPU gate; it does not build — run `make` first. With no args it gates the default set (iri dish 256 + envtest). The no-arg gate PASSES at HEAD. (envtest was the lone `known-bug` — a GPU env-sampling divergence, max_channel_err=255 — fixed 2026-09-04 by reading the CPU mip chain from a buffer in the prefiltered path; re-baselined to `ok`, max 3. See `iridescent_dish_nextsteps.md`.)
+- `tools/parity.sh [SCENE ...]` is the CPU/GPU gate; it does not build — run `make` first. With no args it gates the default set (iri dish 256 + envtest). The no-arg gate PASSES at HEAD. (envtest was the last `known-bug` — a GPU env-sampling divergence, max_channel_err=255 — fixed 2026-09-04 by reading the CPU mip chain from a buffer in the prefiltered path; re-baselined to `ok`, max 3. See `iridescent_dish_nextsteps.md`.)
 - `make volcheck` runs the KHR_materials_volume math parity check — needs `node` (`tools/vol_ref_check.mjs`).
+- Thin-film math parity (the iridescence twin of `volcheck`): `tools/iri_check.c` (float32, includes `thin_film.h`) vs `tools/iri_ref_check.mjs` (float64 port of the three.js GLSL). No make target — `g++ -O2 -I./include -std=c++11 tools/iri_check.c -o /tmp/iri_check -lm`, run both, max abs diff ≤ 1e-3 (currently 1.5e-6). The `.mjs` reads GLSL from `web_viewer/node_modules/three` (gitignored — `npm install` in `web_viewer/` first on a fresh clone).
 - `test_scenes/lamp_glass_mask.ppm` is committed (`*.ppm` is gitignored; it was force-added). Use the committed file, do not regenerate it.
 - `make models` regenerates the procedural meshes in `models/` — regenerate, never hand-edit.
-- Working plan docs are the record of project state (rebaseline history, open bugs): `glass_parity_nextsteps.md` (next work item — glass light-transport CPU/GPU divergence), `iridescent_dish_nextsteps.md` (active feature plan), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps".
+- Working plan docs are the record of project state (rebaseline history, open bugs): `iridescent_dish_nextsteps.md` (active feature plan), `glass_parity_nextsteps.md` (closed 2026-09-05 — see "Open items"), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps". Note `nextsteps.md` has drifted: its line-number citations are stale and some items listed as deferred are already done — verify against HEAD.
 
 ## Render parity (Tier 1 gate)
 
@@ -90,3 +91,21 @@ Gate semantics (`tools/parity.sh`):
   the scene is re-baselined to `ok`.
 - **No baseline.** A scene with no line in the file FAILs; certify it with
   `tools/parity.sh --rebaseline SCENE`.
+
+## Open items (2026-09-05)
+
+- The "glass light-transport divergence" was not a glass bug: GPU `env_procedural`
+  (shaders.metal:287) was missing the per-channel clamp the CPU applies
+  (envmap.cc:47-49) before the final brightness scale. Fixed;
+  `glass_parity_nextsteps.md` is closed.
+- `envmaps/polyhaven_haven_01_1k.hdr` is a 404 HTML page, not a valid HDR. Lamp and
+  dragon silently fall back to the procedural env, so they are not rendering their
+  intended background. Fix the asset before trusting any lamp/dragon parity number.
+- `tools/parity_baselines.txt` floors for lamp and dragon were re-baselined while the
+  HDR was still 404ing, so they measure the procedural fallback path, not the real
+  envmap path. Re-baseline after the asset is fixed.
+- The no-arg gate (iri dish + envtest) uses valid envs only, so the procedural-env
+  path has zero gate coverage. That is why the clamp bug went unnoticed. Add a
+  procedural-env scene to the default gate.
+- Envmap load failure is silent. Given a423182 made the Metal->CPU fallback loud for
+  the same reason, this should fail loud too.
