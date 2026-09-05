@@ -49,7 +49,7 @@
     }
   ],
   "environment": {
-    "file": "envmaps/polyhaven_haven_01_1k.hdr",
+    "file": "envmaps/polyhaven_studio_small_03_1k.hdr",
     "intensity": 7.0
   },
   "floor": true,
