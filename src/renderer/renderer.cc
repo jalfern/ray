@@ -1196,6 +1196,11 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.width = scene->width;
     ctx.height = scene->height;
     ctx.env = envmap_load(scene->env_file, scene->env_intensity);
+    if (scene->env_file[0] && !ctx.env) {
+        fprintf(stderr, "[renderer] FATAL: failed to load envmap '%s' "
+                "(missing, unreadable, or not a valid HDR)\n", scene->env_file);
+        exit(1);
+    }
     ctx.textures = scene->textures;
     ctx.num_textures = scene->num_textures;
     ctx.opts.has_floor = scene->has_floor;
