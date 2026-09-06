@@ -36,6 +36,9 @@ typedef struct {
     float* normals;
     float* texcoords;
     int*   indices;
+    float* tangents;   /* per face-vertex tangent xyz + handedness (num_indices*4),
+                        or NULL. From the TANGENT attribute if present, else
+                        generated with MikkTSpace. */
     int num_verts;
     int num_indices;
     int material;
@@ -50,6 +53,7 @@ typedef struct {
     int pos_acc;
     int norm_acc;
     int tex_acc;
+    int tan_acc;
     int idx_acc;
     int material;
 } GltfPrimitiveRef;

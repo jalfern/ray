@@ -8,6 +8,7 @@
 #include <unistd.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include "mikktspace.h"
 
 /* ── JSON token helpers ──────────────────────────────────────────
  *
@@ -499,7 +500,7 @@ static int parse_primitive(const char** j,
     if (*cur != '{') return 0;
     cur++;
 
-    int pos_acc = -1, norm_acc = -1, tex_acc = -1, idx_acc = -1;
+    int pos_acc = -1, norm_acc = -1, tex_acc = -1, tan_acc = -1, idx_acc = -1;
     int material = -1;
 
     while (*cur && *cur != '}') {
@@ -527,6 +528,7 @@ static int parse_primitive(const char** j,
                     if (strcmp(ak, "POSITION") == 0) pos_acc = av;
                     else if (strcmp(ak, "NORMAL") == 0) norm_acc = av;
                     else if (strcmp(ak, "TEXCOORD_0") == 0) tex_acc = av;
+                    else if (strcmp(ak, "TANGENT") == 0) tan_acc = av;
                 }
                 skip_ws_ptr(&attr);
                 if (*attr == ',') attr++;
@@ -566,6 +568,11 @@ static int parse_primitive(const char** j,
     if (tex_acc >= 0 && tex_acc < na) {
         float* tc = decode_acc_f32(&accs[tex_acc], views, bufs);
         if (tc) out->texcoords = tc;
+    }
+    /* Decode tangents (VEC4) */
+    if (tan_acc >= 0 && tan_acc < na) {
+        float* tv = decode_acc_f32(&accs[tan_acc], views, bufs);
+        if (tv) out->tangents = tv;
     }
     /* Decode indices */
     if (idx_acc >= 0 && idx_acc < na) {
@@ -621,6 +628,7 @@ static int parse_mesh_refs(const char** j,
                     pr.pos_acc = -1;
                     pr.norm_acc = -1;
                     pr.tex_acc = -1;
+                    pr.tan_acc = -1;
                     pr.idx_acc = -1;
                     pr.material = -1;
 
@@ -651,6 +659,7 @@ static int parse_mesh_refs(const char** j,
                             if (strcmp(ak, "POSITION") == 0) pr.pos_acc = av;
                             else if (strcmp(ak, "NORMAL") == 0) pr.norm_acc = av;
                             else if (strcmp(ak, "TEXCOORD_0") == 0) pr.tex_acc = av;
+                            else if (strcmp(ak, "TANGENT") == 0) pr.tan_acc = av;
                         }
                         skip_ws_ptr(&attr);
                         if (*attr == ',') attr++;
@@ -693,6 +702,93 @@ static int parse_mesh_refs(const char** j,
     return n;
 }
 
+/* ── Tangent generation (Phase 3, Stage 1) ─────────────────────
+ *
+ * Produces per-vertex tangents for one primitive: xyz + handedness
+ * (w = +/-1), 4 floats per vertex, object space.  Priority: the
+ * glTF TANGENT attribute when present, else MikkTSpace (the
+ * vendored reference generator — the near-universal DCC default
+ * for tangent-space baking).  MikkTSpace needs positions+normals+
+ * texcoords+indices; a primitive without UVs gets no tangents.
+ *
+ * The callbacks expose the indexed mesh as a face-vertex soup
+ * (MikkTSpace welds internally by pos/norm/texc equality and
+ * warns against reusing the client index list).  Writing its
+ * per-face-vertex result into a per-vertex array is safe here:
+ * glTF carries NORMAL per vertex, so two faces sharing a vertex
+ * index share its normal and UVs, weld to one MikkTSpace vertex,
+ * and therefore receive identical tangents.
+ */
+
+typedef struct {
+    const float* pos;
+    const float* nrm;
+    const float* tex;
+    const int*   idx;
+    int num_tris;
+    float* out_tan;   /* num_verts * 4 floats */
+} TanGen;
+
+static int tg_num_faces(const SMikkTSpaceContext* c) {
+    return ((const TanGen*)c->m_pUserData)->num_tris;
+}
+
+static int tg_num_verts_of_face(const SMikkTSpaceContext* c, const int f) {
+    (void)c; (void)f;
+    return 3;
+}
+
+static void tg_get_pos(const SMikkTSpaceContext* c, float out[3], const int f, const int v) {
+    const TanGen* t = (const TanGen*)c->m_pUserData;
+    const float* p = t->pos + (size_t)t->idx[f * 3 + v] * 3;
+    out[0] = p[0]; out[1] = p[1]; out[2] = p[2];
+}
+
+static void tg_get_nrm(const SMikkTSpaceContext* c, float out[3], const int f, const int v) {
+    const TanGen* t = (const TanGen*)c->m_pUserData;
+    const float* p = t->nrm + (size_t)t->idx[f * 3 + v] * 3;
+    out[0] = p[0]; out[1] = p[1]; out[2] = p[2];
+}
+
+static void tg_get_tex(const SMikkTSpaceContext* c, float out[2], const int f, const int v) {
+    const TanGen* t = (const TanGen*)c->m_pUserData;
+    const float* p = t->tex + (size_t)t->idx[f * 3 + v] * 2;
+    out[0] = p[0]; out[1] = p[1];
+}
+
+static void tg_set_tspace(const SMikkTSpaceContext* c, const float tang[3], const float fSign,
+                          const int f, const int v) {
+    TanGen* t = (TanGen*)c->m_pUserData;
+    float* o = t->out_tan + (size_t)t->idx[f * 3 + v] * 4;
+    o[0] = tang[0]; o[1] = tang[1]; o[2] = tang[2]; o[3] = fSign;
+}
+
+static float* gen_tangents_mikk(const float* pos, const float* nrm, const float* tex,
+                                const int* idx, int num_verts, int num_indices) {
+    TanGen tg;
+    SMikkTSpaceInterface iface;
+    SMikkTSpaceContext ctx;
+    float* out = (float*)calloc((size_t)num_verts * 4, sizeof(float));
+    if (!out) return NULL;
+    tg.pos = pos; tg.nrm = nrm; tg.tex = tex; tg.idx = idx;
+    tg.num_tris = num_indices / 3;
+    tg.out_tan = out;
+    iface.m_getNumFaces = tg_num_faces;
+    iface.m_getNumVerticesOfFace = tg_num_verts_of_face;
+    iface.m_getPosition = tg_get_pos;
+    iface.m_getNormal = tg_get_nrm;
+    iface.m_getTexCoord = tg_get_tex;
+    iface.m_setTSpace = NULL;
+    iface.m_setTSpaceBasic = tg_set_tspace;
+    ctx.m_pInterface = &iface;
+    ctx.m_pUserData = &tg;
+    if (!genTangSpaceDefault(&ctx)) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
 /* ── Decode pass: turn mesh refs into actual triangle data ──── */
 
 static void decode_meshes(GltfMeshRef* refs, int num_refs,
@@ -730,6 +826,20 @@ static void decode_meshes(GltfMeshRef* refs, int num_refs,
                     pd.indices = ix;
                     pd.num_indices = accs[pr->idx_acc].count;
                 }
+            }
+
+            /* Per-vertex tangents for the normal-map path (nothing
+               consumes them until Stage 3).  TANGENT attribute wins;
+               else MikkTSpace where the full attribute set is present. */
+            if (pr->tan_acc >= 0 && pr->tan_acc < na &&
+                accs[pr->tan_acc].num_components == 4) {
+                float* tv = decode_acc_f32(&accs[pr->tan_acc], views, bufs);
+                if (tv) pd.tangents = tv;
+            }
+            if (!pd.tangents && pd.positions && pd.normals && pd.texcoords &&
+                pd.indices && pd.num_indices >= 3) {
+                pd.tangents = gen_tangents_mikk(pd.positions, pd.normals, pd.texcoords,
+                                                 pd.indices, pd.num_verts, pd.num_indices);
             }
 
             out[mi].prims[out[mi].num_prims++] = pd;
@@ -1789,6 +1899,34 @@ static void build_gltf_scene(
                             mo->tris[ti].t0[0] = mo->tris[ti].t0[1] = 0;
                             mo->tris[ti].t1[0] = mo->tris[ti].t1[1] = 0;
                             mo->tris[ti].t2[0] = mo->tris[ti].t2[1] = 0;
+                        }
+                        /* World-space tangent frame for the normal-map
+                           path (Stage 3 consumes this; Stage 1 only
+                           bakes it).  Object-space tangents were
+                           generated per primitive in decode_meshes;
+                           here they cross the node transform:
+                           inverse-transpose like the normals, then
+                           Gram-Schmidt against the transformed
+                           normal. */
+                        if (pd->tangents) {
+                            const int tvi[3] = { i0, i1, i2 };
+                            const float* tvn[3] = { n0, n1, n2 };
+                            float* tvd[3] = { mo->tris[ti].tan0, mo->tris[ti].tan1,
+                                              mo->tris[ti].tan2 };
+                            for (int k = 0; k < 3; k++) {
+                                const float* src = pd->tangents + (size_t)tvi[k] * 4;
+                                float Tin[3] = { src[0], src[1], src[2] };
+                                float T[3];
+                                m4_transform_normal(T, world, Tin);
+                                float d = T[0]*tvn[k][0] + T[1]*tvn[k][1] + T[2]*tvn[k][2];
+                                T[0] -= d * tvn[k][0];
+                                T[1] -= d * tvn[k][1];
+                                T[2] -= d * tvn[k][2];
+                                float len = sqrtf(T[0]*T[0] + T[1]*T[1] + T[2]*T[2]);
+                                if (len > 1e-8f) { T[0] /= len; T[1] /= len; T[2] /= len; }
+                                tvd[k][0] = T[0]; tvd[k][1] = T[1]; tvd[k][2] = T[2];
+                                tvd[k][3] = src[3];
+                            }
                         }
                         mo->tris[ti].mesh_idx = out->num_meshes;
                         if (ti < 5 && g_gltf_debug_enabled) {

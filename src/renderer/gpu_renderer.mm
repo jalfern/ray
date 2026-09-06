@@ -184,6 +184,7 @@ static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal"
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 112, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
 static pthread_mutex_t gpu_init_mutex = PTHREAD_MUTEX_INITIALIZER;

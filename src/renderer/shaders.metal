@@ -100,7 +100,10 @@ struct TriGpu {
     packed_float3 n0, n1, n2;
     packed_float2 t0, t1, t2;
     int mesh_idx;
+    packed_float4 tan0, tan1, tan2;
 };
+
+static_assert(sizeof(TriGpu) == 148, "TriGpu size must match gpu_renderer.mm");
 
 struct BvhNode {
     packed_float3 bbox_min;

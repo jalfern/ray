@@ -178,27 +178,55 @@ dish256 instead.
     skipped — Stage 1 must sanity-check generated tangents against a
     hand-computed tangent on one known triangle instead.
 
-### Stage 1 — Tangents into `TriGpu` (nothing reads them)
+### Stage 1 — Tangents into `TriGpu` (nothing reads them) — DONE 2026-09-06
 
-- Makefile: `.c` compile rule for the vendored file (or rename `.cc`).
+- Makefile: `.c` compile rule for the vendored file (compiled as C with
+  `$(CC) -std=c11`; 2 benign upstream warnings, no C++ rename needed).
 - `GltfPrimitiveRef` +`tan_acc`; `GltfPrimitiveData` +`tangents`
-  (float*, num_verts×4) + ready-flag. Parse `TANGENT` (VEC4) at both
-  attribute sites (`gltf_parser.cc:529`, `:653`).
+  (float*, num_verts×4). Parse `TANGENT` (VEC4) at both attribute sites
+  (the dead `parse_primitive` and the live `parse_mesh_refs`).
 - Tangent generation per primitive before the bake (see §1): TANGENT attr
   if present, else MikkTSpace (requires positions+normals+texcoords+
   indices; no UVs → zero tangents).
-- `TriGpu` +`tan0[4]/tan1[4]/tan2[4]` (100→148 B); MSL mirror;
-  `static_assert` both sides. 4th component = bitangent handedness —
-  not optional (drops it and mirrored UV islands flip).
-- Bake loop (`gltf_parser.cc:1747-1803`): transform + Gram-Schmidt as in
-  §1.
-- Zero the new fields at every other `TriGpu` producer:
-  `obj_parser.cc:139-160`, `parser.cc:321` neighborhood,
-  `tools/gen_{ico,torus,vase}.c`. `bvh.cc:286` is a whole-struct memcpy —
-  layout-safe, no change.
-- **Gate: commit-delta 0 px on all gate scenes** (dish256, envtest,
-  suzanne, lamp, dragon). A missed producer shows up here as a garbage
-  render, not as a subtle shading error later. `make clean && make`.
+- `TriGpu` +`tan0[4]/tan1[4]/tan2[4]` (100→148 B); MSL mirror
+  (`packed_float4`); `static_assert` both sides. 4th component = bitangent
+  handedness — not optional (drops it and mirrored UV islands flip).
+- Bake loop: transform + Gram-Schmidt as in §1.
+- Zero the new fields at every other `TriGpu` producer: obj_parser and
+  parser.cc build `TriGpu` with `calloc`, so the new fields are already
+  zero; no change needed there. `bvh.cc:286` is a whole-struct memcpy —
+  layout-safe, unchanged.
+
+**Landed (2026-09-06), against the staged plan above:**
+
+- Generation lives in `decode_meshes` (once per primitive, object space),
+  not in the bake loop — idempotence across instanced nodes is by
+  construction, so no ready-flag was added. Storage is per shared vertex
+  (`num_verts*4`); safe because glTF carries NORMAL per vertex, so two
+  faces sharing a vertex index weld to one MikkTSpace vertex and get
+  identical tangents (the last-write-wins trap MikkTSpace warns about
+  needs per-vertex normals, which indexed glTF cannot have).
+- `parse_primitive` is dead code (never called — the live chain is
+  `parse_mesh_refs` → `decode_meshes`); it got the TANGENT parse anyway
+  so the two JSON sites cannot drift.
+- `tools/tan_check.c` + `make tanchk`: the Stage 0 sanity-check
+  requirement, run as a unit test on a unit square with a hand-computed
+  frame (expect T=(1,0,0), w=+1). PASS.
+- End-to-end probe (temporary, reverted): dish256 with the bake loop
+  dumping tri0/1 per mesh — tangents unit-length, orthogonal to N, and
+  identical across triangles sharing a vertex (smooth propagation works);
+  dish UVs are left-handed (w=-1 everywhere), which is exactly why the
+  handedness component is carried.
+
+**Gate results (four-row harness):**
+
+- Commit delta: all five gate scenes (dish256, envtest, suzanne, lamp,
+  dragon) **byte-identical** before-vs-after on BOTH backends (20/20
+  renders, `cmp` clean; every run's `^backend:` line verified).
+- Cross-backend: all five scenes PASS with signatures **exactly equal**
+  to the recorded baselines (dish256 137/147/1/1/0, envtest
+  629/1083/3/3/0, suzanne 132/162/3/3/0, lamp 8627/10698/64/19/0,
+  dragon 23353/54186/205/20/4) — zero pixels moved anywhere.
 
 ### Stage 2 — Material-field plumbing (nothing reads them)
 

@@ -1,5 +1,7 @@
 CXX = g++
-CXXFLAGS = -Wall -Wextra -O2 -I./include -std=c++11
+CC = cc
+CXXFLAGS = -Wall -Wextra -O2 -I./include -I./third_party/mikktspace -std=c++11
+CFLAGS = -Wall -Wextra -O2 -std=c11
 MMFLAGS = -Wall -Wextra -O2 -I./include -I$(BUILD_DIR)/renderer -std=c++11 -fobjc-arc
 LDFLAGS = -lm -lz -framework Metal -framework Foundation
 
@@ -23,8 +25,12 @@ SOURCES = $(SRC_DIR)/main.cc \
 
 MM_SOURCES = $(SRC_DIR)/renderer/gpu_renderer.mm
 
+# Vendored C (Mikkelsen reference tangent generator) — compiled as C.
+C_SOURCES = third_party/mikktspace/mikktspace.c
+
 OBJECTS = $(patsubst $(SRC_DIR)/%.cc,$(BUILD_DIR)/%.o,$(SOURCES))
 OBJECTS += $(patsubst $(SRC_DIR)/%.mm,$(BUILD_DIR)/%.o,$(MM_SOURCES))
+OBJECTS += $(patsubst third_party/%.c,$(BUILD_DIR)/third_party/%.o,$(C_SOURCES))
 
 SHADER_SRC = $(SRC_DIR)/renderer/shaders.metal
 SHADER_HDR = $(BUILD_DIR)/renderer/shader_src.h
@@ -41,6 +47,11 @@ $(TARGET): $(OBJECTS)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cc
 	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Vendored C sources (mikktspace) — compiled as C, not C++.
+$(BUILD_DIR)/third_party/%.o: third_party/%.c
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Embed the Metal shader source as a C string compiled at runtime (no `metal`
 # CLI / Xcode needed — newLibraryWithSource uses the framework's compiler).
@@ -80,6 +91,15 @@ $(TOOLS_BUILD)/gen_vase: $(TOOLS_DIR)/gen_vase.c
 $(TOOLS_BUILD)/vol_check: $(TOOLS_DIR)/vol_check.c
 	mkdir -p $(TOOLS_BUILD)
 	$(CXX) $(CXXFLAGS) $< -o $@ -lm
+
+# Phase 3 Stage 1 tangent-generator sanity check (mirrors the TanGen adapter
+# in gltf_parser.cc against the vendored MikkTSpace).
+tanchk: $(TOOLS_BUILD)/tan_check
+	$(TOOLS_BUILD)/tan_check
+
+$(TOOLS_BUILD)/tan_check: $(TOOLS_DIR)/tan_check.c third_party/mikktspace/mikktspace.c
+	mkdir -p $(TOOLS_BUILD)
+	$(CC) -Wall -Wextra -O2 -std=c11 -I./third_party/mikktspace $^ -o $@ -lm
 
 # KHR_materials_volume math parity: float32 (CPU header) vs float64
 # (reference port of the three.js volumeAttenuation GLSL).
