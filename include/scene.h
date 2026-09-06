@@ -56,6 +56,10 @@ typedef struct {
     float att_dist;
     int vol_tex_index;
     int32_t ao_tex_index;
+    int32_t nrm_tex_index;   /* normal-map image index, -1 = none */
+    float nrm_scale;         /* normalTexture.scale, default 1.0 */
+    int32_t alpha_mode;      /* 0 = OPAQUE, 1 = MASK */
+    float alpha_cutoff;      /* alphaCutoff, default 0.5 */
 } MeshObj;
 
 typedef struct {

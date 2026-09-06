@@ -238,6 +238,11 @@ static char* parse_mesh(char* p, MeshObj* m, const char* scene_dir) {
     m->att_b = 1.0f;
     m->att_dist = INFINITY;
     m->vol_tex_index = -1;
+    m->ao_tex_index = -1;
+    m->nrm_tex_index = -1;
+    m->nrm_scale = 1.0f;
+    m->alpha_mode = 0;
+    m->alpha_cutoff = 0.5f;
     strcpy(m->material, "glass");
 
     char file_path[256] = {0};

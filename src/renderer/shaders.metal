@@ -457,7 +457,13 @@ struct MeshMat {
     float att_dist;
     int vol_tex_index;
     int ao_tex_index;
+    int nrm_tex_index;
+    float nrm_scale;
+    int alpha_mode;
+    float alpha_cutoff;
 };
+
+static_assert(sizeof(MeshMat) == 128, "MeshMat size must match gpu_renderer.mm");
 
 static float hash3(float x, float y, float z) {
     float n = sin(x * 127.1f + y * 311.7f + z * 74.7f) * 43758.5453f;

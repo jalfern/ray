@@ -886,6 +886,10 @@ typedef struct {
     int iri_tex;           /* thickness texture index, -1 = none */
     int vol_tex;           /* thicknessTexture index, -1 = none (parsed, reported only) */
     int ao_tex;            /* occlusionTexture index, -1 = none */
+    int normal_tex;        /* normalTexture index, -1 = none */
+    float normal_scale;    /* normalTexture.scale, default 1.0 */
+    int alpha_mode;        /* 0 = OPAQUE, 1 = MASK (BLEND parsed, rendered as OPAQUE) */
+    float alpha_cutoff;    /* alphaCutoff, default 0.5 */
 } GltfMaterial;
 
 /* ── 4×4 matrix helpers (column-major) ──────────────────────── */
@@ -1179,6 +1183,10 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].att_dist = INFINITY;
         mats[n].vol_tex = -1;
         mats[n].ao_tex = -1;
+        mats[n].normal_tex = -1;
+        mats[n].normal_scale = 1.0f;
+        mats[n].alpha_mode = 0;
+        mats[n].alpha_cutoff = 0.5f;
 
         const char* obj = cur;
         skip_ws_ptr(&obj);
@@ -1253,28 +1261,6 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                         }
                         if (*tx == '}') tx++;
                         p = tx;
-                    } else if (strcmp(pk, "occlusionTexture") == 0) {
-                        const char* tx = p;
-                        skip_ws_ptr(&tx);
-                        if (*tx == '{') tx++;
-                        while (*tx && *tx != '}') {
-                            char tk[64];
-                            const char* tsave = tx;
-                            if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
-                            skip_ws_ptr(&tx);
-                            if (*tx == ':') tx++;
-                            skip_ws_ptr(&tx);
-                            float fv;
-                            if (strcmp(tk, "index") == 0) {
-                                if (parse_json_number(&tx, &fv)) mats[n].ao_tex = (int)fv;
-                            } else {
-                                skip_value(&tx);
-                            }
-                            skip_ws_ptr(&tx);
-                            if (*tx == ',') tx++;
-                        }
-                        if (*tx == '}') tx++;
-                        p = tx;
                     } else {
                         skip_value(&p);
                     }
@@ -1285,6 +1271,69 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                 obj = p;
             } else if (strcmp(kbuf, "emissiveFactor") == 0) {
                 parse_float_array(&obj, mats[n].emissive, 3);
+            } else if (strcmp(kbuf, "normalTexture") == 0) {
+                const char* tx = obj;
+                skip_ws_ptr(&tx);
+                if (*tx == '{') tx++;
+                while (*tx && *tx != '}') {
+                    char tk[64];
+                    const char* tsave = tx;
+                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                    skip_ws_ptr(&tx);
+                    if (*tx == ':') tx++;
+                    skip_ws_ptr(&tx);
+                    float fv;
+                    if (strcmp(tk, "index") == 0) {
+                        if (parse_json_number(&tx, &fv)) mats[n].normal_tex = (int)fv;
+                    } else if (strcmp(tk, "scale") == 0) {
+                        if (parse_json_number(&tx, &fv)) mats[n].normal_scale = fv;
+                    } else {
+                        skip_value(&tx);
+                    }
+                    skip_ws_ptr(&tx);
+                    if (*tx == ',') tx++;
+                }
+                if (*tx == '}') tx++;
+                obj = tx;
+            } else if (strcmp(kbuf, "occlusionTexture") == 0) {
+                /* glTF carries occlusionTexture at the material top level
+                   (sibling of pbrMetallicRoughness); the handler that used
+                   to sit inside the pbrMetallicRoughness sub-loop never
+                   fired on spec-compliant files. */
+                const char* tx = obj;
+                skip_ws_ptr(&tx);
+                if (*tx == '{') tx++;
+                while (*tx && *tx != '}') {
+                    char tk[64];
+                    const char* tsave = tx;
+                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                    skip_ws_ptr(&tx);
+                    if (*tx == ':') tx++;
+                    skip_ws_ptr(&tx);
+                    float fv;
+                    if (strcmp(tk, "index") == 0) {
+                        if (parse_json_number(&tx, &fv)) mats[n].ao_tex = (int)fv;
+                    } else {
+                        skip_value(&tx);
+                    }
+                    skip_ws_ptr(&tx);
+                    if (*tx == ',') tx++;
+                }
+                if (*tx == '}') tx++;
+                obj = tx;
+            } else if (strcmp(kbuf, "alphaMode") == 0) {
+                char abuf[16];
+                if (parse_json_string(&obj, abuf, sizeof(abuf))) {
+                    if (strcmp(abuf, "MASK") == 0) {
+                        mats[n].alpha_mode = 1;
+                    } else if (strcmp(abuf, "BLEND") == 0) {
+                        fprintf(stderr, "  [gltf:mat] idx=%d alphaMode BLEND not supported, rendering as OPAQUE\n", n);
+                    }
+                } else {
+                    skip_value(&obj);
+                }
+            } else if (strcmp(kbuf, "alphaCutoff") == 0) {
+                float fv; if (parse_json_number(&obj, &fv)) mats[n].alpha_cutoff = fv;
             } else if (strcmp(kbuf, "extensions") == 0) {
                 const char* ex = obj;
                 skip_ws_ptr(&ex);
@@ -1456,14 +1505,16 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         if (*obj == '}') obj++;
 
         if (g_gltf_debug_enabled) {
-            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
+            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d nrm_tex=%d nrm_scale=%.6g alpha_mode=%d alpha_cutoff=%.6g\n",
                     n, mats[n].transmission, mats[n].ior,
                     mats[n].iri_factor, mats[n].iri_ior,
                     mats[n].iri_thin_min, mats[n].iri_thin_max,
                     mats[n].iri_tex,
                     mats[n].vol_th,
                     mats[n].att_r, mats[n].att_g, mats[n].att_b,
-                    mats[n].att_dist, mats[n].vol_tex);
+                    mats[n].att_dist, mats[n].vol_tex,
+                    mats[n].normal_tex, mats[n].normal_scale,
+                    mats[n].alpha_mode, mats[n].alpha_cutoff);
         }
 
         cur = obj;
@@ -1697,6 +1748,10 @@ static void build_gltf_scene(
                 mo->att_dist = INFINITY;
                 mo->vol_tex_index = -1;
                 mo->ao_tex_index = -1;
+                mo->nrm_tex_index = -1;
+                mo->nrm_scale = 1.0f;
+                mo->alpha_mode = 0;
+                mo->alpha_cutoff = 0.5f;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1752,6 +1807,17 @@ static void build_gltf_scene(
                                 mo->ao_tex_index = img_idx;
                         }
                     }
+                    if (materials[mat_idx].normal_tex >= 0) {
+                        int tex_idx = materials[mat_idx].normal_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->nrm_tex_index = img_idx;
+                        }
+                    }
+                    mo->nrm_scale = materials[mat_idx].normal_scale;
+                    mo->alpha_mode = materials[mat_idx].alpha_mode;
+                    mo->alpha_cutoff = materials[mat_idx].alpha_cutoff;
                 }
                 mo->iri_factor = iri_factor;
                 mo->iri_ior = iri_ior;

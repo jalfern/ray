@@ -1076,6 +1076,11 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].att_b = scene->meshes[i].att_b;
             meshes[i].att_dist = scene->meshes[i].att_dist;
             meshes[i].vol_tex_index = scene->meshes[i].vol_tex_index;
+            meshes[i].ao_tex_index = scene->meshes[i].ao_tex_index;
+            meshes[i].nrm_tex_index = scene->meshes[i].nrm_tex_index;
+            meshes[i].nrm_scale = scene->meshes[i].nrm_scale;
+            meshes[i].alpha_mode = scene->meshes[i].alpha_mode;
+            meshes[i].alpha_cutoff = scene->meshes[i].alpha_cutoff;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;

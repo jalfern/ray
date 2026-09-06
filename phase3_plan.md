@@ -228,7 +228,7 @@ dish256 instead.
   629/1083/3/3/0, suzanne 132/162/3/3/0, lamp 8627/10698/64/19/0,
   dragon 23353/54186/205/20/4) — zero pixels moved anywhere.
 
-### Stage 2 — Material-field plumbing (nothing reads them)
+### Stage 2 — Material-field plumbing (nothing reads them) — DONE 2026-09-06
 
 One commit for every Phase 3 material field:
 
@@ -250,6 +250,39 @@ One commit for every Phase 3 material field:
 - Extend the `[gltf:mat]` debug line (`gltf_parser.cc:1659`) with
   `nrm_tex= nrm_scale= alpha_mode= alpha_cutoff=`.
 - **Gate: commit-delta 0 px.**
+
+**Landed (2026-09-06), against the staged plan above — three plan
+corrections, all verified against the tree and the assets:**
+
+- `normalTexture` is a **top-level** material key (sibling of
+  `pbrMetallicRoughness`) in the glTF 2.0 spec and in every test gltf
+  that carries it — the staged "pbrMetallicRoughness.normalTexture"
+  placement would never have fired. Parsed at the top level, next to
+  `emissiveFactor`/`extensions`.
+- The pre-existing `occlusionTexture` handler sat inside the
+  `pbrMetallicRoughness` sub-loop and was therefore **dead code** —
+  every `occlusionTexture` slot in the assets is top-level, so
+  `ao_tex` never parsed and `ao_tex_index` stayed -1 everywhere.
+  Moved to the top-level key loop. No pixel effect (nothing reads it
+  yet), but Stage 4's `ao_tex_index >= 0` branch now has a live
+  parse path — re-verify the "no-op render" claim against the real
+  ORM-vs-AO slot identity, not the dead parse.
+- `MeshMatGpu`/`MeshMat` is 112→**128 B**, not 132: `ao_tex_index`
+  already existed, so only four fields were added. `static_assert`
+  both sides (the MSL one is new — shaders.metal previously only
+  asserted SceneGpu/TriGpu).
+- `parse_mesh` (JSON scene path) now defaults all five fields — this
+  also fixes `ao_tex_index` reading uninitialized stack garbage there
+  (that path builds `MeshObj` with `realloc`, not `calloc`).
+- `alphaMode: BLEND` parses, warns on stderr, renders OPAQUE (D5).
+  No current asset uses BLEND (dish mat 3 is the only alphaMode in
+  the asset set, and it is MASK).
+- Gate (four-row harness, five scenes × both backends, 20 renders,
+  every `^backend:` line verified): commit delta **byte-identical**
+  HEAD-vs-new on all ten same-backend pairs; cross-backend
+  signatures exactly equal to the recorded baselines (zero pixels
+  moved anywhere); `tools/parity.sh` no-arg gate PASS on the new
+  build.
 
 ### Stage 3 — Normal mapping (CPU + GPU; the visual one)
 

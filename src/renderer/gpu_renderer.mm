@@ -176,6 +176,10 @@ typedef struct {
     float att_dist;
     int vol_tex_index;
     int32_t ao_tex_index;
+    int32_t nrm_tex_index;
+    float nrm_scale;
+    int32_t alpha_mode;
+    float alpha_cutoff;
 } MeshMatGpu;
 
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
@@ -183,7 +187,7 @@ static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.meta
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 112, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 128, "MeshMatGpu layout must match shaders.metal");
 static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
@@ -381,8 +385,12 @@ Image* render_frame_gpu(const Scene* scene) {
                    mats[m].att_g = mo->att_g;
                    mats[m].att_b = mo->att_b;
                    mats[m].att_dist = mo->att_dist;
-                    mats[m].vol_tex_index = mo->vol_tex_index;
-                    mats[m].ao_tex_index = mo->ao_tex_index;
+                     mats[m].vol_tex_index = mo->vol_tex_index;
+                     mats[m].ao_tex_index = mo->ao_tex_index;
+                     mats[m].nrm_tex_index = mo->nrm_tex_index;
+                     mats[m].nrm_scale = mo->nrm_scale;
+                     mats[m].alpha_mode = mo->alpha_mode;
+                     mats[m].alpha_cutoff = mo->alpha_cutoff;
                    mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;
