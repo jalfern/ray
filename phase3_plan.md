@@ -83,13 +83,18 @@ max 1, envtest 629 px / max 3, suzanne 132 px / max 3, lamp 8627 px / max
   correct for normal maps and AO).
 - **The test asset has no `TANGENT` attribute**, so MikkTSpace generation
   is the live path; the attribute path is for future assets.
-- **The asset's `occlusionTexture` slots point at the ORM images**
-  (e.g. olives `occlusionTexture` = `olives_orm.png`). Per glTF, the R
-  channel of whatever sits in the `occlusionTexture` slot is AO. So the
-  branch is "is `ao_tex_index` set; sample its R; else fall back to
-  `orm_tex_index`'s R" — and for the *current* asset set that fallback
-  means Stage 4 is a **no-op render** (same image, same R channel).
-  Nonzero commit-delta there is a bug.
+- **The asset's `occlusionTexture` slots** — per glTF, the R channel of
+  whatever sits in the `occlusionTexture` slot is AO, so the branch is
+  "is `ao_tex_index` set; sample its R; else fall back to
+  `orm_tex_index`'s R". **Re-verified 2026-09-06: the old "all AO slots
+  point at the ORM image, so Stage 4 is a no-op render" claim is
+  FALSE.** It was only ever true while the AO parse was dead (see
+  Stage 2 landed note). With the parse live, dish256 glassDish (mat0)
+  resolves `ao_tex_index` = `goldleaf_orm.png` while its ORM slot is
+  EMPTY — today that mesh samples nothing (ao=1.0), so Stage 4 starts
+  sampling there and pixels can move. True no-ops: envtest (no gltf),
+  suzanne/dragon (no `occlusionTexture`), lamp (AO slot == ORM slot,
+  all three mats), dish olives+goldLeaf (AO slot == ORM slot).
 - **`normalTexture.scale` is on the critical path**: dish mesh 0 and gold
   have scale 1, but `glassCover` has **scale 2**. A scale bug is invisible
   on two of three meshes and wrong on the third.
@@ -290,24 +295,56 @@ corrections, all verified against the tree and the assets:**
   - `hit_mesh_bvh` (`:163`) also returns the interpolated tangent
     (mirror the normal interpolation at `:200-205`).
   - New linear 3-channel sampler (pattern: `sample_iri_thickness` `:297`).
-  - TBN: `B = N × T · sign(w)`, re-orthonormalize (`T' = T - N(T·N)`,
-    `B' = N × T'`), unpack `2c - 1`, multiply by `nrm_scale`,
-    `N_pert = normalize(T'·x + B'·y + N·z)`.
+  - TBN (chain PINNED by the convention audit below):
+    `T' = normalize(T - N(T·N))` (Gram-Schmidt on the interpolated
+    tangent), then `B' = sign(w) · normalize(N × T')` — the handedness
+    sign SURVIVES the re-orthonormalization — unpack `2c - 1`, multiply
+    by `nrm_scale`, `N_pert = normalize(T'·x + B'·y + N·z)`.
   - Use `N_pert` at: diffuse `:746`, specular `:748-752`, emissive
     `:797`, IBL irradiance `:821`, iridescence `cv` `:709`. Geometric
     `n` stays at: reflection `:840`, refraction `:875-888`, side `:211`
     (per D1).
   - Sentinel path (`nrm_tex_index < 0`) must be op-identical to today —
     structure as `if (has nrm) { … } else { N_pert = n; }`.
-- GPU (`shaders.metal`): mirror operation-for-operation. Tangent
-  interpolation next to `tri_normal` (`:804`); sample via the existing
-  `sample_linear` (`:570` — already no-sRGB, correct for data). Same
-  term-by-term usage (diffuse `:992`, specular `:996`, emissive `:1038`,
-  IBL `:1057`, iridescence `cv` `:951`; geometric for `:1075` onward).
+- GPU (`shaders.metal`): mirror operation-for-operation — same TBN
+  chain INCLUDING the `sign(w)` on `B'`. Tangent interpolation next to
+  `tri_normal` (def `:166`, call `:813` — the staged `:804` drifted
+  with Stage 1/2); sample via the existing `sample_linear` (`:570` —
+  already no-sRGB, correct for data). Same term-by-term usage
+  (diffuse `:992`, specular `:996`, emissive `:1038`, IBL `:1057`,
+  iridescence `cv` `:951`; geometric for `:1075` onward).
+- **Convention audit (2026-09-06, before any Stage 3 code).** Nothing
+  read `tan0/1/2` on either backend (grep-verified), so the sign
+  convention had to be pinned from the data, not from a later pixel
+  diff. Findings: (a) the 4th tangent component is MikkTSpace's
+  `fSign` stored verbatim by `tg_set_tspace` (and glTF `tangent.w` on
+  the TANGENT-attr path — same handedness semantics, one chain
+  covers both); (b) the vendored mikktspace.h defines the
+  reconstruction as `bitangent = fSign * cross(vN, tangent)` — twice,
+  and its sampler section sanctions reconstructing B at shading time
+  "as long as both sides do it the same way"; (c) the staged chain
+  dropped the sign in its second clause (`B' = N × T'` after
+  `B = N × T · sign(w)`) — on the dish, `w = -1` on EVERY UV (Stage 1
+  probe), so as written both backends would have flipped the
+  bitangent everywhere, agreed with each other, and passed the 0-px
+  commit-delta gate while rendering wrong. Pinned chain: sign
+  survives Gram-Schmidt. (d) Interpolation mirror is exact on both
+  sides: CPU `hit_mesh_bvh` and GPU `tri_normal` both barycentric-
+  interpolate the per-vertex float3 normals then normalize — Stage 3
+  interpolates the tangent the same way (as float4, carrying `w`
+  along) and takes `sign(w)` from the interpolated 4th component. (e) three.js (now present under
+  `web_viewer/node_modules`) uses `mat3(T, B, N)` with a supplied
+  per-vertex bitangent, or derivative-based `getTangentFrame` when
+  none is supplied — neither constrains a reconstruct-B-from-sign
+  design, so MikkTSpace is the authority here, and it is what the
+  data carries.
 - **Gate: commit-delta nonzero on dish (expected — this changes the
   image); all no-normal-map scenes byte-identical; dish256 cross-backend
   within certification (`p99_9 <= 22`, `n_severe <= 8`) →
-  `tools/parity.sh --rebaseline test_scenes/scene_iri_dish_parity256.json`.**
+  `tools/parity.sh --rebaseline test_scenes/scene_iri_dish_parity256.json`.
+  The `RAY_NRMDBG` probe below is the convention check — read it on the
+  dish, where `w = -1` everywhere; a flipped B shows as inverted green
+  on every normal-mapped pixel, which the pixel diff cannot see.**
 - Visual: dome ripple pattern vs
   `test_scenes/IridescentDishWithOlives/screenshot_Large.jpg`
   (`tools/sidebyside.py`). Optional `RAY_NRMDBG` probe render (T/R,
@@ -317,11 +354,23 @@ corrections, all verified against the tree and the assets:**
 
 - CPU: in the ORM block (`renderer.cc:654-680`), `ao_tex_index >= 0` →
   sample its R (linear) as `sphere_ao`; else the existing ORM.R. ORM G/B
-  (roughness/metallic) still come from the ORM slot.
+  (roughness/metallic) still come from the ORM slot. The R read must
+  reuse the ORM block's exact bilinear math (it samples raw /255, no
+  transfer fn) — where AO slot == ORM slot the branch re-reads the
+  same image, and any sampler drift there breaks the 0-px bar for the
+  wrong reason.
 - GPU: mirror (`shaders.metal:911-918`, `sample_linear(...).r`).
-- **Gate: commit-delta 0 px expected on every current scene** — all
-  `occlusionTexture` slots in the current assets point at the same image
-  as the ORM slot, so this is a no-op render here. Nonzero is a bug.
+- **Gate (premise re-verified 2026-09-06 — the staged "no-op
+  everywhere, nonzero is a bug" claim was FALSE):** with the AO parse
+  live (Stage 2), dish256 glassDish (mat0) resolves
+  `ao_tex_index = goldleaf_orm.png` while its ORM slot is EMPTY —
+  today it samples nothing (ao=1.0), so Stage 4 starts sampling there
+  and its pixels can move (how far depends on the transmission-gated
+  AO terms — measure, don't assume). True no-ops: envtest (no gltf),
+  suzanne + dragon (no `occlusionTexture` anywhere), lamp (AO slot ==
+  ORM slot on all three mats), dish olives + goldLeaf (AO slot == ORM
+  slot). Expect commit-delta 0 px on those four; dish256 may
+  legitimately move → re-baseline, do not treat nonzero as a bug.
   (Optional: a small synthetic scene with a *separate* AO image to
   exercise the non-fallback branch — new asset, only if wanted.)
 
