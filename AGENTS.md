@@ -70,22 +70,26 @@ Harness notes:
 ### Cross-backend baselines
 
 Source of truth: `tools/parity_baselines.txt` — one line per scene,
-`status  scene  differing  sum_abs_err  max_channel_err`. Do not copy the
-signatures into docs; the file is the record and `tools/parity.sh` reads it,
-so a restated table here would just drift.
+`status  scene  differing  sum_abs_err  max_channel_err  p99_9_channel_err  n_severe`.
+Do not copy the signatures into docs; the file is the record and
+`tools/parity.sh` reads it, so a restated table here would just drift.
 
 Gate semantics (`tools/parity.sh`):
 
 - **Regression rule.** A scene with an `ok` baseline PASSes iff the current
-  CPU-vs-GPU render is `<=` the baseline on all three metrics (differing,
-  sum_abs_err, max_channel_err). Reruns are deterministic on one machine, so
-  any metric above baseline is a regression -> FAIL.
-- **Certification bar.** `--rebaseline` writes `ok` only when
-  `max_channel_err <= FLOOR_MAX` (127), else it records `known-bug`. 127 is
-  "no pixel reaches half the 8-bit range": a legitimate floor never puts a
-  pixel at >=128/255 in any channel, but a real structural bug (one backend
-  black where the other is bright) does. See the FLOOR_MAX commit for the
-  histogram derivation.
+  CPU-vs-GPU render is `<=` the baseline on all five metrics (differing,
+  sum_abs_err, max_channel_err, p99_9_channel_err, n_severe). Reruns are
+  deterministic on one machine, so any metric above baseline is a regression
+  -> FAIL.
+- **Certification bar.** `--rebaseline` writes `ok` only when BOTH
+  `p99_9_channel_err <= FLOOR_P999` (22) AND `n_severe <= FLOOR_SEVERE` (8),
+  else `known-bug`. Both bars are per-channel (0-255, comparable to
+  max_channel_err): `p99_9_channel_err` is the nearest-rank 99.9th percentile
+  of the per-channel error over the channels that differ (tail-robust —
+  firefly channels push max_channel_err high without moving it); `n_severe`
+  counts channels with |error| >= 127 and catches a small high-error region the
+  sparse-tail percentile is robust to. max_channel_err is recorded and
+  regression-gated but no longer decides certification.
 - **known-bug.** A recorded CPU/GPU divergence above the certification bar.
   The gate FAILS on it (it is not a floor) until the divergence is fixed and
   the scene is re-baselined to `ok`.

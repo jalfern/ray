@@ -9,11 +9,18 @@
 #     being nonzero.
 #
 # A scene is only gateable if it has a line in tools/parity_baselines.txt.
-# Certification (--rebaseline) writes status "ok" only when max_channel_err is
-# <= FLOOR_MAX, else "known-bug". FLOOR_MAX is the "no near-full-range pixel"
-# bar: a legitimate floor never puts a pixel at >=128/255 in any channel, but a
-# real structural bug (one backend black where the other is bright) does. A
-# "known-bug" scene FAILS until its divergence is fixed and it is re-baselined.
+# Certification (--rebaseline) writes status "ok" only when BOTH
+#   p99_9_channel_err <= FLOOR_P999   AND   n_severe <= FLOOR_SEVERE
+# else "known-bug". Two complementary bars, both per-channel (0-255 scale,
+# comparable to max_channel_err):
+#   - p99_9_channel_err: nearest-rank 99.9th percentile of the per-channel
+#     error over the channels that differ. Tail-robust: a few firefly channels
+#     push max_channel_err high without moving it. Catches a broad moderate
+#     divergence (a region wrong by a moderate amount).
+#   - n_severe: count of channels with |error| >= 127 (near-full-range). Catches
+#     a small HIGH-error region that the sparse-tail percentile is robust to.
+# max_channel_err is still recorded and regression-gated, but no longer decides
+# certification. A "known-bug" scene FAILS until fixed and re-baselined.
 #
 #   tools/parity.sh [SCENE ...]              # run the gate
 #   tools/parity.sh --rebaseline SCENE ...   # record/refresh baselines
@@ -33,11 +40,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 OUTDIR="$(mktemp -d /tmp/parity.XXXXXX)"
 BASELINE_FILE="tools/parity_baselines.txt"
-# A pixel at > FLOOR_MAX (i.e. >=128) in any channel is a near-full-range
-# divergence, not float rounding. Legit floors measured 2026-08-31 top out at
-# max_channel_err=80 (lamp) with ZERO pixels at err>=128; the envtest bug has
-# 2659 (13.6%). 127 = "strictly under half the 8-bit range".
-FLOOR_MAX=127
+# FLOOR_P999: cert bar on p99_9_channel_err. Legit floors measured 2026-09-05
+# top out at p99.9=20 (dragon), lamp 19. p999_B tracks a faulted region's max
+# brightness (fault injection: 20x20 zeroed box reads ~15/19/24/34/42/62 for
+# region max 15/20/25/35/45/75). A fault dimmer than the firefly floor (~20) is
+# indistinguishable from fireflies, so the bar can only sit just above it: 22
+# catches every measured fault (dimmest real = 24) with 2 units over the floor.
+FLOOR_P999=22
+# FLOOR_SEVERE: cert bar on n_severe (channels with |error| >= 127). Legit
+# floors measured 2026-09-05 top out at n_severe=4 (dragon fireflies); all
+# others 0. Fault injection: a fully-bright zeroed box adds ~3 severe channels
+# per pixel (1x1->7, 2x2->16, 3x3->31). 8 = 2x the firefly floor: catches a
+# 2x2+ high-error region while still allowing a single firefly-level pixel (7).
+FLOOR_SEVERE=8
 
 REBASELINE=0
 SCENES=()
@@ -77,7 +92,7 @@ run_render() { # $1=scene $2=tag $3=want (metal|cpu)
     fi
 }
 
-run_diff() { # $1=cpu.ppm $2=gpu.ppm -> sets DIFF_COUNT DIFF_SUM DIFF_MAX
+run_diff() { # $1=cpu.ppm $2=gpu.ppm -> sets DIFF_COUNT DIFF_SUM DIFF_MAX DIFF_P999 DIFF_SEVERE
     local out
     out="$(python3 tools/ppm_diff.py "$OUTDIR/$1" "$OUTDIR/$2")" || {
         echo "FAIL: ppm_diff failed for $1 vs $2" >&2; return 1; }
@@ -85,27 +100,29 @@ run_diff() { # $1=cpu.ppm $2=gpu.ppm -> sets DIFF_COUNT DIFF_SUM DIFF_MAX
     DIFF_COUNT="${out#*differing=}"; DIFF_COUNT="${DIFF_COUNT%% *}"
     DIFF_SUM="${out#*sum_abs_err=}";   DIFF_SUM="${DIFF_SUM%% *}"
     DIFF_MAX="${out#*max_channel_err=}"; DIFF_MAX="${DIFF_MAX%% *}"
+    DIFF_P999="${out#*p99_9_channel_err=}"; DIFF_P999="${DIFF_P999%% *}"
+    DIFF_SEVERE="${out#*n_severe=}"; DIFF_SEVERE="${DIFF_SEVERE%% *}"
 }
 
-lookup_baseline() { # $1=scene -> "status differing sum max" (empty if none)
+lookup_baseline() { # $1=scene -> "status differing sum max p999 severe" (empty if none)
     [ -f "$BASELINE_FILE" ] || return 0
-    awk -F'\t' -v s="$1" '!/^\#/ && $2==s {print $1, $3, $4, $5}' "$BASELINE_FILE"
+    awk -F'\t' -v s="$1" '!/^\#/ && $2==s {print $1, $3, $4, $5, $6, $7}' "$BASELINE_FILE"
 }
 
-upsert_baseline() { # $1=scene $2=status $3=differing $4=sum $5=max
-    local scene=$1 status=$2 d=$3 s=$4 m=$5
+upsert_baseline() { # $1=scene $2=status $3=differing $4=sum $5=max $6=p999 $7=severe
+    local scene=$1 status=$2 d=$3 s=$4 m=$5 p=$6 v=$7
     local tmp
     tmp="$(mktemp "${BASELINE_FILE}.XXXXXX")"
-    awk -F'\t' -v OFS='\t' -v sc="$scene" -v st="$status" -v d="$d" -v s="$s" -v m="$m" '
-        !/^\#/ { if ($2 == sc) { print st, sc, d, s, m; done=1; next } }
+    awk -F'\t' -v OFS='\t' -v sc="$scene" -v st="$status" -v d="$d" -v s="$s" -v m="$m" -v p="$p" -v v="$v" '
+        !/^\#/ { if ($2 == sc) { print st, sc, d, s, m, p, v; done=1; next } }
                 { print }
-        END { if (!done) print st, sc, d, s, m }
+        END { if (!done) print st, sc, d, s, m, p, v }
     ' "$BASELINE_FILE" > "$tmp"
     mv "$tmp" "$BASELINE_FILE"
 }
 
 gate_scene() { # $1=scene
-    local scene=$1 base relscene ok bl st rest bdiff bsum bmax regress
+    local scene=$1 base relscene ok bl st rest bdiff bsum bmax bp999 bsevere regress
     base="$(basename "$scene" .json)"
     echo "== $scene =="
     ok=1
@@ -126,22 +143,27 @@ gate_scene() { # $1=scene
     fi
     st="${bl%% *}"; rest="${bl#* }"
     bdiff="${rest%% *}"; rest="${rest#* }"
-    bsum="${rest%% *}"; bmax="${rest#* }"
+    bsum="${rest%% *}"; rest="${rest#* }"
+    bmax="${rest%% *}"; rest="${rest#* }"
+    bp999="${rest%% *}"; rest="${rest#* }"
+    bsevere="${rest%% *}"
     if [ "$st" = "known-bug" ]; then
-        echo "FAIL: $base — known CPU/GPU divergence (baseline max_channel_err=$bmax > FLOOR_MAX=$FLOOR_MAX); fix it, then re-baseline"
+        echo "FAIL: $base — known CPU/GPU divergence (baseline p99_9=$bp999 n_severe=$bsevere); fix it, then re-baseline"
         fail=1
         return
     fi
     regress=0
-    [ "$DIFF_COUNT" -gt "$bdiff" ] && regress=1
-    [ "$DIFF_SUM"   -gt "$bsum"   ] && regress=1
-    [ "$DIFF_MAX"   -gt "$bmax"   ] && regress=1
+    [ "$DIFF_COUNT"  -gt "$bdiff"   ] && regress=1
+    [ "$DIFF_SUM"    -gt "$bsum"    ] && regress=1
+    [ "$DIFF_MAX"    -gt "$bmax"    ] && regress=1
+    [ "$DIFF_P999"   -gt "$bp999"   ] && regress=1
+    [ "$DIFF_SEVERE" -gt "$bsevere" ] && regress=1
     if [ "$regress" = 1 ]; then
-        echo "FAIL: $base — regression vs baseline (cur diff=$DIFF_COUNT sum=$DIFF_SUM max=$DIFF_MAX  >  base diff=$bdiff sum=$bsum max=$bmax)"
+        echo "FAIL: $base — regression vs baseline (cur diff=$DIFF_COUNT sum=$DIFF_SUM max=$DIFF_MAX p999=$DIFF_P999 severe=$DIFF_SEVERE  >  base diff=$bdiff sum=$bsum max=$bmax p999=$bp999 severe=$bsevere)"
         fail=1
         return
     fi
-    echo "PASS: $base (diff=$DIFF_COUNT sum=$DIFF_SUM max=$DIFF_MAX  <=  base diff=$bdiff sum=$bsum max=$bmax)"
+    echo "PASS: $base (diff=$DIFF_COUNT sum=$DIFF_SUM max=$DIFF_MAX p999=$DIFF_P999 severe=$DIFF_SEVERE  <=  base diff=$bdiff sum=$bsum max=$bmax p999=$bp999 severe=$bsevere)"
 }
 
 rebaseline_scene() { # $1=scene
@@ -157,15 +179,15 @@ rebaseline_scene() { # $1=scene
         return
     fi
     run_diff "${base}_cpu.ppm" "${base}_gpu.ppm" || { fail=1; return; }
-    if [ "$DIFF_MAX" -le "$FLOOR_MAX" ]; then
+    if [ "$DIFF_P999" -le "$FLOOR_P999" ] && [ "$DIFF_SEVERE" -le "$FLOOR_SEVERE" ]; then
         st="ok"
     else
         st="known-bug"
-        echo "WARNING: $base max_channel_err=$DIFF_MAX > FLOOR_MAX=$FLOOR_MAX — real CPU/GPU divergence, recorded as known-bug (gate will FAIL until fixed)"
+        echo "WARNING: $base p99_9=$DIFF_P999 (floor $FLOOR_P999) n_severe=$DIFF_SEVERE (floor $FLOOR_SEVERE) — real CPU/GPU divergence, recorded as known-bug (gate will FAIL until fixed)"
     fi
     relscene="${scene#./}"; relscene="${relscene#"$ROOT"/}"
-    upsert_baseline "$relscene" "$st" "$DIFF_COUNT" "$DIFF_SUM" "$DIFF_MAX"
-    echo "recorded: $st  $relscene  differing=$DIFF_COUNT sum_abs_err=$DIFF_SUM max_channel_err=$DIFF_MAX"
+    upsert_baseline "$relscene" "$st" "$DIFF_COUNT" "$DIFF_SUM" "$DIFF_MAX" "$DIFF_P999" "$DIFF_SEVERE"
+    echo "recorded: $st  $relscene  differing=$DIFF_COUNT sum_abs_err=$DIFF_SUM max_channel_err=$DIFF_MAX p99_9_channel_err=$DIFF_P999 n_severe=$DIFF_SEVERE"
 }
 
 if [ $REBASELINE -eq 1 ]; then

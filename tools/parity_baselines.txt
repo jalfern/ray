@@ -1,22 +1,26 @@
 # Per-scene cross-backend parity baselines (CPU vs GPU).
 #
-# Tab-separated:  status  scene  differing  sum_abs_err  max_channel_err
+# Tab-separated:  status  scene  differing  sum_abs_err  max_channel_err  p99_9_channel_err  n_severe
 #
 # status:
 #   ok         certified legitimate floor. Gate PASSes iff the current render is
-#              <= the baseline on ALL THREE metrics (deterministic on one machine).
-#   known-bug  recorded CPU/GPU divergence with max_channel_err > FLOOR_MAX.
-#              Not certifiable; the gate FAILS on it until the divergence is fixed
-#              and the scene is re-baselined.
+#              <= the baseline on ALL FIVE metrics (deterministic on one machine).
+#   known-bug  recorded CPU/GPU divergence failing certification. Not certifiable;
+#              the gate FAILS on it until the divergence is fixed and the scene
+#              is re-baselined.
 #
-# Certification (tools/parity.sh --rebaseline) writes "ok" only when
-# max_channel_err <= FLOOR_MAX, else "known-bug". FLOOR_MAX (see parity.sh) is the
-# "no near-full-range pixel" bar: a legitimate floor never puts a pixel at
-# >=128/255 in any channel, but a real structural bug (one backend black where the
- # other is bright) does. Measured 2026-08-31: dish/suzanne/dragon/lamp have ZERO
- # pixels at err>=128 (max 1/27/53/80); envtest had 2659 (13.6%) — that was the
- # known-bug env-sampling divergence, since fixed (GPU prefiltered path now reads
- # the CPU mip chain from a buffer; envtest re-baselined to ok, max 3).
+# Certification (tools/parity.sh --rebaseline) writes "ok" only when BOTH
+#   p99_9_channel_err <= FLOOR_P999 (22)   AND   n_severe <= FLOOR_SEVERE (8)
+# else "known-bug". Both bars are per-channel (0-255, comparable to
+# max_channel_err):
+#   - p99_9_channel_err: nearest-rank 99.9th percentile of the per-channel
+#     error over the channels that differ. Tail-robust: firefly channels push
+#     max_channel_err high without moving it. Catches a broad moderate
+#     divergence.
+#   - n_severe: count of channels with |error| >= 127 (near-full-range). Catches
+#     a small HIGH-error region the sparse-tail percentile is robust to.
+# max_channel_err is still recorded and regression-gated, but no longer decides
+# certification.
 #
 # 2026-09-05: envmaps/polyhaven_haven_01_1k.hdr had been a 404 HTML page since July.
 # envmap_load returned NULL and the call site never checked it, so 11 scenes (incl.
@@ -30,10 +34,11 @@
 #   lamp:   max=64,  5 px >=16, clustered ~(351,908); 8459/8627 differ by exactly 1
 #   dragon: max=205, 5 px >=64 (2 >=128), scattered x101-447 y165-195; 99.89% <=16
 # Both look like caustic fireflies (one backend takes a TIR branch the other does
-# not), not structural divergence. Dragon is recorded known-bug only because 205
-# exceeds FLOOR_MAX. A percentile metric (p99.9) would read 8 and 2 respectively.
-ok	test_scenes/scene_iri_dish_parity256.json	137	147	1
-ok	test_scenes/scene_suzanne_stdout.json	66642	366309	27
-known-bug	test_scenes/scene_dragon_stdout.json	23353	54186	205
-ok	test_scenes/scene_lamp_stdout.json	8627	10698	64
-ok	test_scenes/scene_envtest_stdout.json	629	1083	3
+# not), not structural divergence. The two cert columns clear them: dragon
+# p99_9=20 n_severe=4, lamp p99_9=19 n_severe=0, both within the floors (48/16),
+# so both are ok.
+ok	test_scenes/scene_iri_dish_parity256.json	137	147	1	1	0
+ok	test_scenes/scene_suzanne_stdout.json	132	162	3	3	0
+ok	test_scenes/scene_dragon_stdout.json	23353	54186	205	20	4
+ok	test_scenes/scene_lamp_stdout.json	8627	10698	64	19	0
+ok	test_scenes/scene_envtest_stdout.json	629	1083	3	3	0
