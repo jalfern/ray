@@ -581,7 +581,13 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (med.ior > 1.0f &&
             vol_sigma_nonzero(med.cr, med.cg, med.cb, med.att_dist))
             return (V){0,0,0};
-        if (opts.has_bg_color)
+        /* Background color is what the CAMERA sees on a miss.  An escaped
+           SPECULAR ray (spec_rough >= 0) instead samples the loaded env when
+           there is one — otherwise mirror-like surfaces (gold, glass) see the
+           flat bg color (black on black) instead of IBL specular.  Without an
+           env the escaped ray keeps the legacy bg-color behavior.  Same
+           semantics on both backends (GPU mirror: the hit_type==0 block). */
+        if (opts.has_bg_color && (spec_rough < 0.0f || !(env && env->data)))
             return (V){opts.bg_color.x, opts.bg_color.y, opts.bg_color.z};
         float er, eg, eb;
         /* Phase 2 IBL: a specular/refracted ray (spec_rough >= 0) escaping

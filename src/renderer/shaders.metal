@@ -835,11 +835,15 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                    to the env samples it blurred by the spawning surface's
                    roughness (the traced mirror is the sampled lobe in the
                    sharp limit — no separate env-lobe term); primary rays
-                   (sr < 0) keep the sharp env. */
-                 float3 env_col = has_bg_color ? float3(bg_r, bg_g, bg_b)
-                                : (has_env ? (sr >= 0.0f ? sample_env_prefiltered(env_mip, env_w, env_h, rd, sr, env_mips)
-                                                         : sample_envmap(env_tex, rd))
-                                           : env_procedural(rd));
+                   (sr < 0) keep the sharp env.  With a bg color set, primary
+                   rays see the bg color but escaped specular rays sample the
+                   env when one is loaded (CPU twin: renderer.cc escape block). */
+                bool esc_spec = sr >= 0.0f;
+                float3 env_col = (has_bg_color && (!esc_spec || !has_env))
+                    ? float3(bg_r, bg_g, bg_b)
+                    : (has_env ? (esc_spec ? sample_env_prefiltered(env_mip, env_w, env_h, rd, sr, env_mips)
+                                            : sample_envmap(env_tex, rd))
+                               : env_procedural(rd));
                 /* Infinite path in an absorbing medium: photon fully absorbed. */
                 if (in_med && vol_sigma_nonzero(float3(mid_c.y, mid_c.z, mid_c.w), mid_d))
                     break;

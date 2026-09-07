@@ -395,6 +395,24 @@ verified):**
   scene's env makes the frame dark, which predates this stage (baseline
   render equally dark).
 
+### Follow-up (2026-09-07, between Stages 3 and 4) — escape-ray IBL fix
+
+Built while making the "pretty" gallery render of the dish (now
+`test_scenes/scene_iri_dish_pretty.json` + `IridescentDishPretty.gltf`, a
+camera-only copy of the model, + `tools/gen_env.py` generating
+`envmaps/studio_dome.hdr`). Finding: a scene with `"background"` set made
+every escaped SPECULAR ray return the flat bg color instead of sampling
+the env — mirror-like metal and glass saw black, not the environment
+(the dish's gold plate read as fireflies-on-black). Fix: escaped
+specular rays (spec_rough >= 0) now sample the prefiltered env when one
+is loaded; primary rays and the no-env case keep the bg color. CPU +
+GPU mirrored (renderer.cc escape block / shaders.metal hit_type==0).
+
+Gate (four-row, 20 renders, backend lines verified): the four no-bg gate
+scenes byte-identical on both backends (fix is bg-gated); dish256 — the
+only bg+env scene — legitimately moved and was re-baselined to
+155/173/2/2/0 (p99_9=2, n_severe=0 -> ok). No-arg gate PASS.
+
 ### Stage 4 — Standalone AO
 
 - CPU: in the ORM block (`renderer.cc:654-680`), `ao_tex_index >= 0` →
