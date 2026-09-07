@@ -164,11 +164,18 @@ static bool hit_tri(float3 o, float3 d, float3 v0, float3 v1, float3 v2,
 }
 
 static float3 tri_normal(float3 v0, float3 v1, float3 v2,
-                         float3 n0, float3 n1, float3 n2, float u, float v) {
+                          float3 n0, float3 n1, float3 n2, float u, float v) {
     float w = 1.0f - u - v;
     float3 n = w * n0 + u * n1 + v * n2;
     float len = length(n);
     return len > EPS ? n / len : float3(0.0f, 1.0f, 0.0f);
+}
+
+/* Interpolated tangent (xyz) + bitangent handedness (w).  Barycentric mirror
+   of tri_normal; NOT normalized here (the TBN builder Gram-Schmidt's it). */
+static float4 tri_tangent(float4 tan0, float4 tan1, float4 tan2, float u, float v) {
+    float w = 1.0f - u - v;
+    return w * tan0 + u * tan1 + v * tan2;
 }
 
 static bool hit_floor(float3 o, float3 d, thread float& t) {
@@ -754,6 +761,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             int mi = -1;
             float mu = 0, mv = 0;
             float2 mesh_uv = float2(0);
+            float4 mesh_tan = float4(0);
             if (nb > 0) {
                 int stk2[64];
                 int sp = 0;
@@ -817,6 +825,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                   side_entry = dot(hit_n, rd) < 0;
                   if (dot(hit_n, rd) > 0) hit_n = -hit_n;
                   mesh_uv = (1.0f - mu - mv) * tris[mi].t0 + mu * tris[mi].t1 + mv * tris[mi].t2;
+                  mesh_tan = tri_tangent(tris[mi].tan0, tris[mi].tan1, tris[mi].tan2, mu, mv);
             } else if (hf0) {
                 hit_type = 3; t_hit = tf;
             }
@@ -928,6 +937,35 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 }
             }
 
+            /* Tangent-space normal perturbation (glTF normalTexture) — mirror
+               of the CPU: frame from the STORED (pre-flip) normal, whole
+               perturbed normal negated on a back-face hit (three.js).  The
+               geometric normal n_hit (flipped to face the ray) is kept for
+               ray construction: reflection, refraction, side (D1).  Sentinel
+               (no normal map, or no UVs): n_pert stays n_hit — op-identical. */
+            float3 n_pert = n_hit;
+            if (hit_type == 2) {
+                int nmidx = tris[mi].mesh_idx;
+                if (nmidx >= 0 && nmidx < nm &&
+                    mats[nmidx].nrm_tex_index >= 0 && mats[nmidx].nrm_tex_index < num_textures &&
+                    mats[nmidx].nrm_tex_index < MAXTEX) {
+                    float3 T = mesh_tan.xyz;
+                    if (length(T) > EPS) {
+                        float3 Ns = side_entry ? n_hit : -n_hit;
+                        float sw = (mesh_tan.w >= 0.0f) ? 1.0f : -1.0f;
+                        float3 Tp = normalize(T - Ns * dot(T, Ns));
+                        float3 Bp = normalize(cross(Ns, Tp) * sw);
+                        float3 c = sample_linear(scene_tex.t[mats[nmidx].nrm_tex_index], mesh_uv);
+                        float s = mats[nmidx].nrm_scale;
+                        float mx = (2.0f * c.x - 1.0f) * s;
+                        float my = (2.0f * c.y - 1.0f) * s;
+                        float mz = (2.0f * c.z - 1.0f);
+                        n_pert = normalize(Tp * mx + Bp * my + Ns * mz);
+                        if (!side_entry) n_pert = -n_pert;
+                    }
+                }
+            }
+
             if (mat == MAT_EMISSIVE) {
                 accum += sc_col * (thru * Tseg);
                 break;
@@ -957,7 +995,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                   }
                  float d_nm = mats[iri_mid].iri_thin_min +
                               (mats[iri_mid].iri_thin_max - mats[iri_mid].iri_thin_min) * tv;
-                 float cv = min(abs(dot(n_hit, normalize(ro - p))), 1.0f);
+                 float cv = min(abs(dot(n_pert, normalize(ro - p))), 1.0f);
                  float3 bf0 = f0;
                  if (mat == MAT_GLASS) {
                      /* Dielectric substrate F0 from the glass IOR (three.js feeds
@@ -998,18 +1036,18 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                                      sidx, hit_type == 1 ? si : -1,
                                      shadow_skip_mesh);
 
-                float diff = max(0.0f, dot(n_hit, ld));
+                float diff = max(0.0f, dot(n_pert, ld));
                 float3 vw = normalize(ro - p);
                 float3 hv = normalize(ld + vw);
                 float spec_exp = 2.0f + 510.0f * (1.0f - srough) * (1.0f - srough);
-                float sp = pow(max(0.0f, dot(n_hit, hv)), spec_exp);
+                float sp = pow(max(0.0f, dot(n_pert, hv)), spec_exp);
                 float lf = sh ? 0.0f : 1.0f;
                 float ss = (mat == MAT_GLASS) ? 0.8f : 0.4f;
 
                 /* AO (ORM.R) attenuates the ambient and diffuse terms only;
                    the specular lobe and the F0-weighted mirror are untouched. */
                 if (mat == MAT_SUBSURFACE) {
-                    float bdiff = max(0.0f, dot(-n_hit, ld));
+                    float bdiff = max(0.0f, dot(-n_pert, ld));
                     lit += sc_col * diff * lf * 0.7f * sao
                          + sc_col * bdiff * lf * 0.3f * sao
                          + sc_col * sp * ss * lf;
@@ -1044,7 +1082,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 }
                 if (ldist < 1e-4f) continue;
                 float3 wi = normalize(lp - p);
-                float cos_surf = max(0.0f, dot(n_hit, wi));
+                float cos_surf = max(0.0f, dot(n_pert, wi));
                 if (cos_surf <= 0) continue;
                 float cos_light = max(0.0f, dot(ln, -wi));
                 if (cos_light <= 0) continue;
@@ -1063,7 +1101,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                Operation order matches the CPU twin: (sc*ir) * f. */
             float3 amb;
             if (has_env) {
-                float3 ir = env_irradiance_sh(ibl_sh, n_hit);
+                float3 ir = env_irradiance_sh(ibl_sh, n_pert);
                 float f = kd * sao * (1.0f - glass_trans);
                 amb = (sc_col * ir) * f;
             } else {

@@ -350,6 +350,51 @@ corrections, all verified against the tree and the assets:**
   (`tools/sidebyside.py`). Optional `RAY_NRMDBG` probe render (T/R,
   B/G, N/B colored) for handedness bugs.
 
+**Landed (2026-09-06), against the staged plan above:**
+
+- CPU (`renderer.cc`): `hit_mesh_bvh` +`out_tan` (barycentric mirror of
+  the normal interpolation, float4 carrying `w`); new `sample_normal_map`
+  (linear RGB bilinear, wrap, same index math as `sample_iri_thickness`);
+  `trace_ray` captures the winning hit's tangent and builds `n_pert` with
+  the pinned chain — frame from the STORED pre-flip normal (`Ns = side ?
+  n : -n`), `sign(w)` surviving Gram-Schmidt, whole result negated on a
+  back-face hit (three.js `faceDirection`). `n_pert` used at: iridescence
+  `cv`, diffuse, specular, subsurface `bdiff`, emissive `cos_surf`,
+  `envmap_irradiance`. Geometric `n` untouched at: reflection, refraction
+  (`n_adj`/`n_refr`), side. Sentinel (`nrm_tex_index < 0` or zero
+  tangent): `n_pert = n`, op-identical.
+- GPU (`shaders.metal`): `tri_tangent` helper (barycentric, unnormalized —
+  the TBN builder Gram-Schmidt's), `mesh_tan` captured in the BVH walk,
+  identical `n_pert` block (frame from `side_entry ? n_hit : -n_hit`),
+  same six term sites. Normal map sampled via the existing `sample_linear`
+  (hardware bilinear) — the same sampler the ORM path already uses, so the
+  CPU hand-rolled vs GPU hardware bilinear delta is the pre-existing ORM
+  pattern, inside the 1/255 floor (D2's bit-exact requirement applies to
+  MASK's alpha test only, where a last-bit flip changes which surface is
+  hit — not to continuous normal perturbations).
+- Convention check: the `RAY_NRMDBG` probe was not added; the Stage 0
+  convention audit pins the chain, and CPU/GPU commit deltas agree to
+  within 2 px (9237 vs 9235, both max 11) — a flipped B would move the
+  two backends' deltas differently.
+
+**Gate results (four-row harness, 20 renders, every `^backend:` line
+verified):**
+
+- Commit delta: dish256 moved on both backends (CPU 9237 px / 15.42% /
+  max 11, GPU 9235 px / 15.42% / max 11 — the normal-map effect,
+  consistent across backends); envtest, suzanne, dragon, lamp
+  **byte-identical** before-vs-after on BOTH backends (8/8 `cmp` clean) —
+  sentinel paths op-identical.
+- Cross-backend (new CPU vs new GPU): all five scenes exactly equal to
+  the recorded baselines — dish256 143/151/1/1/0 (re-baselined;
+  p99_9=1 <= 22, n_severe=0 <= 8 → `ok`), envtest 629/1083/3/3/0,
+  suzanne 132/162/3/3/0, dragon 23353/54186/205/20/4, lamp
+  8627/10698/64/19/0. No-arg `tools/parity.sh` PASS on the new build.
+- Visual: cover ripple pattern and dish-rim highlights visibly perturbed
+  vs the pre-change render (brightened crops in `images/`); the parity
+  scene's env makes the frame dark, which predates this stage (baseline
+  render equally dark).
+
 ### Stage 4 — Standalone AO
 
 - CPU: in the ORM block (`renderer.cc:654-680`), `ao_tex_index >= 0` →

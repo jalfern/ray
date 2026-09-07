@@ -162,7 +162,7 @@ static int bbox_hit(V o, V d, const float* bmin, const float* bmax) {
 
 static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
                           TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx,
-                          int* side_out) {
+                          int* side_out, float* out_tan) {
     float best_t = 1e9f;
     int hit = 0;
     float best_u = 0, best_v = 0;
@@ -213,6 +213,15 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
         if (dot(*hit_normal, d) > 0) *hit_normal = mul(*hit_normal, -1);
         out_uv[0] = w * best_tri->t0[0] + best_u * best_tri->t1[0] + best_v * best_tri->t2[0];
         out_uv[1] = w * best_tri->t0[1] + best_u * best_tri->t1[1] + best_v * best_tri->t2[1];
+        /* Interpolated tangent (xyz) + bitangent handedness (w), same
+           barycentric mirror as the normal above.  World space, baked by the
+           glTF loader.  Zero for meshes without UVs. */
+        if (out_tan) {
+            out_tan[0] = w * best_tri->tan0[0] + best_u * best_tri->tan1[0] + best_v * best_tri->tan2[0];
+            out_tan[1] = w * best_tri->tan0[1] + best_u * best_tri->tan1[1] + best_v * best_tri->tan2[1];
+            out_tan[2] = w * best_tri->tan0[2] + best_u * best_tri->tan1[2] + best_v * best_tri->tan2[2];
+            out_tan[3] = w * best_tri->tan0[3] + best_u * best_tri->tan1[3] + best_v * best_tri->tan2[3];
+        }
     }
     return hit;
 }
@@ -313,6 +322,35 @@ static float sample_iri_thickness(ImageTexture* tex, float u, float v) {
     float g01 = t[(y1 * tex->width + x0) * 4 + 1] / 255.0f;
     float g11 = t[(y1 * tex->width + x1) * 4 + 1] / 255.0f;
     return (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
+}
+
+/* Normal map: linear data in RGB (tangent-space perturbation).  Bilinear,
+   wrap-repeat, no transfer function — same index math as
+   sample_iri_thickness, all three channels. */
+static V sample_normal_map(ImageTexture* tex, float u, float v) {
+    u = u - floorf(u);
+    v = v - floorf(v);
+    float fx = u * tex->width - 0.5f;
+    float fy = v * tex->height - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    float rx = fx - ix;
+    float ry = fy - iy;
+    int x0 = (ix + tex->width * 1024) % tex->width;
+    int y0 = (iy + tex->height * 1024) % tex->height;
+    int x1 = (x0 + 1) % tex->width;
+    int y1 = (y0 + 1) % tex->height;
+    unsigned char* t = tex->data;
+    int p00 = (y0 * tex->width + x0) * 4, p10 = (y0 * tex->width + x1) * 4;
+    int p01 = (y1 * tex->width + x0) * 4, p11 = (y1 * tex->width + x1) * 4;
+    float r00 = t[p00+0]/255.0f, g00 = t[p00+1]/255.0f, b00 = t[p00+2]/255.0f;
+    float r10 = t[p10+0]/255.0f, g10 = t[p10+1]/255.0f, b10 = t[p10+2]/255.0f;
+    float r01 = t[p01+0]/255.0f, g01 = t[p01+1]/255.0f, b01 = t[p01+2]/255.0f;
+    float r11 = t[p11+0]/255.0f, g11 = t[p11+1]/255.0f, b11 = t[p11+2]/255.0f;
+    float r = (1-ry)*((1-rx)*r00 + rx*r10) + ry*((1-rx)*r01 + rx*r11);
+    float g = (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
+    float b = (1-ry)*((1-rx)*b00 + rx*b10) + ry*((1-rx)*b01 + rx*b11);
+    return (V){r, g, b};
 }
 
 static V tone_map(V c, float exposure) {
@@ -467,16 +505,19 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     float tm = 1e9f;
     V mn = {0,0,0};
     float m_uv[2] = {0,0};
+    float m_tan[4] = {0,0,0,0};
     int mi = -1;
     int m_side = 1;  /* shell front(1)/back(0) side of the winning mesh hit */
     for (int i = 0; i < num_meshes; i++) {
         V hit_n;
         float tmi;
         float uv[2];
+        float tan[4] = {0,0,0,0};
         int this_side = 1;
         if (meshes[i].num_bvh_nodes > 0 &&
-            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &this_side) && tmi < tm) {
+            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &this_side, tan) && tmi < tm) {
             tm = tmi; mi = i; mn = hit_n; m_uv[0] = uv[0]; m_uv[1] = uv[1];
+            m_tan[0] = tan[0]; m_tan[1] = tan[1]; m_tan[2] = tan[2]; m_tan[3] = tan[3];
             /* Capture `side` only for the WINNING mesh hit — hit_mesh_bvh
                writes *side_out whenever this mesh has any hit, so without
                this the last-processed mesh (not the nearest one) would win. */
@@ -680,6 +721,34 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
+    /* Tangent-space normal perturbation (glTF normalTexture).  The frame is
+       built from the STORED (pre-flip) normal — three.js builds tbn from
+       vNormal before the double-sided flip — and the whole perturbed normal
+       is negated on a back-face hit (three.js's `normal *= faceDirection`
+       plus `tbn[0,1] *= faceDirection` collapse to negating the result).
+       The geometric normal `n` (flipped to face the ray) is kept for ray
+       construction: reflection, refraction, side (D1).  Sentinel
+       (nrm_tex_index < 0, or no UVs): n_pert stays n — op-identical. */
+    V n_pert = n;
+    if (hit_type == 2 && meshes[mi].nrm_tex_index >= 0 &&
+        meshes[mi].nrm_tex_index < num_textures && textures) {
+        V T = (V){m_tan[0], m_tan[1], m_tan[2]};
+        if (sqrtf(dot(T, T)) > EPS) {
+            V Ns = side ? n : mul(n, -1);              /* stored pre-flip normal */
+            float sw = (m_tan[3] >= 0.0f) ? 1.0f : -1.0f; /* bitangent handedness */
+            V Tp = norm(sub(T, mul(Ns, dot(T, Ns))));  /* Gram-Schmidt on tangent */
+            V Bp = norm(mul(cross(Ns, Tp), sw));       /* sign survives re-ortho */
+            V c = sample_normal_map(&textures[meshes[mi].nrm_tex_index],
+                                    m_uv[0], m_uv[1]);
+            float s = meshes[mi].nrm_scale;
+            float mx = (2.0f * c.x - 1.0f) * s;
+            float my = (2.0f * c.y - 1.0f) * s;
+            float mz = (2.0f * c.z - 1.0f);
+            n_pert = norm(add(add(mul(Tp, mx), mul(Bp, my)), mul(Ns, mz)));
+            if (!side) n_pert = mul(n_pert, -1);
+        }
+    }
+
     if (mat == MAT_EMISSIVE) return (V){sc.x * Tseg.x, sc.y * Tseg.y, sc.z * Tseg.z};
 
     /* Merged plastic+metallic PBR params (per pixel):
@@ -706,7 +775,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
         float d_nm = meshes[mi].iri_thin_min +
                      (meshes[mi].iri_thin_max - meshes[mi].iri_thin_min) * tv;
-        float cv = fabsf(dot(n, norm(sub(o, p))));
+        float cv = fabsf(dot(n_pert, norm(sub(o, p))));
         if (cv > 1.0f) cv = 1.0f;
         V bf0 = f0;
         if (mat == MAT_GLASS) {
@@ -743,19 +812,19 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                              hit_type == 1 ? si : -1,
                              hit_type == 2 ? mi : -1);
 
-        float diff = fmaxf(0.0f, dot(n, light_dir));
+        float diff = fmaxf(0.0f, dot(n_pert, light_dir));
         V view = norm(sub(o, p));
         V half = norm(add(light_dir, view));
 
         float spec_exp = 2.0f + 510.0f * (1.0f - sphere_rough) * (1.0f - sphere_rough);
         float spec_str = (mat == MAT_GLASS) ? 0.8f : 0.4f;
-        float spec = powf(fmaxf(0.0f, dot(n, half)), spec_exp);
+        float spec = powf(fmaxf(0.0f, dot(n_pert, half)), spec_exp);
         float lf = sf ? 0.0f : 1.0f;
 
         /* AO (ORM.R) attenuates the ambient and diffuse terms only; the
            specular lobe and the F0-weighted mirror are untouched. */
         if (mat == MAT_SUBSURFACE) {
-            float bdiff = fmaxf(0.0f, dot(mul(n, -1), light_dir));
+            float bdiff = fmaxf(0.0f, dot(mul(n_pert, -1), light_dir));
             lit = add(lit, add(mul(sc, diff * lf * 0.7f * sphere_ao),
                               add(mul(sc, bdiff * lf * 0.3f * sphere_ao),
                                   mul(sc, spec * spec_str * lf))));
@@ -794,7 +863,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
 
         if (ldist < 1e-4f) continue;
         V wi = norm(sub(lp, p));
-        float cos_surf = fmaxf(0.0f, dot(n, wi));
+        float cos_surf = fmaxf(0.0f, dot(n_pert, wi));
         if (cos_surf <= 0) continue;
         float cos_light = fmaxf(0.0f, dot(ln, mul(wi, -1)));
         if (cos_light <= 0) continue;
@@ -818,7 +887,7 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     V ambient;
     if (env && env->data) {
         float ir, ig, ib;
-        envmap_irradiance(env, n.x, n.y, n.z, &ir, &ig, &ib);
+        envmap_irradiance(env, n_pert.x, n_pert.y, n_pert.z, &ir, &ig, &ib);
         float f = kd * sphere_ao * (1.0f - glass_trans);
         /* (sc*ir)*f, per component — matches the GPU's (sc_col * ir) * f */
         ambient = (V){sc.x * ir * f, sc.y * ig * f, sc.z * ib * f};
