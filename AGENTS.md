@@ -96,20 +96,15 @@ Gate semantics (`tools/parity.sh`):
 - **No baseline.** A scene with no line in the file FAILs; certify it with
   `tools/parity.sh --rebaseline SCENE`.
 
-## Open items (2026-09-05)
+## Open items (2026-09-07)
 
-- The "glass light-transport divergence" was not a glass bug: GPU `env_procedural`
-  (shaders.metal:287) was missing the per-channel clamp the CPU applies
-  (envmap.cc:47-49) before the final brightness scale. Fixed;
-  `glass_parity_nextsteps.md` is closed.
-- `envmaps/polyhaven_haven_01_1k.hdr` is a 404 HTML page, not a valid HDR. Lamp and
-  dragon silently fall back to the procedural env, so they are not rendering their
-  intended background. Fix the asset before trusting any lamp/dragon parity number.
-- `tools/parity_baselines.txt` floors for lamp and dragon were re-baselined while the
-  HDR was still 404ing, so they measure the procedural fallback path, not the real
-  envmap path. Re-baseline after the asset is fixed.
 - The no-arg gate (iri dish + envtest) uses valid envs only, so the procedural-env
   path has zero gate coverage. That is why the clamp bug went unnoticed. Add a
   procedural-env scene to the default gate.
-- Envmap load failure is silent. Given a423182 made the Metal->CPU fallback loud for
-  the same reason, this should fail loud too.
+
+Resolved since 2026-09-05: the glass divergence and the `env_procedural` clamp fix
+are history (see `glass_parity_nextsteps.md`). The 404 `polyhaven_haven_01_1k.hdr`
+placeholder is gone — lamp/dragon now name `polyhaven_studio_small_03_1k.hdr`
+directly and their floors were re-baselined through that real envmap. Envmap load
+failure is loud (FATAL + exit in `renderer.cc`, so a silent procedural fallback
+can no longer masquerade as a parity floor).
