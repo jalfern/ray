@@ -885,7 +885,15 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             gr *= gr;
             bf0 = mul(sc, gr);
         }
+        /* iridescenceTexture: R modulates the film factor (spec + three.js:
+           "iridescence = iridescenceFactor * iridescenceTexture.r", linear
+           data, raw /255).  No texture -> 1.0 (spec default). */
         film_w = meshes[mi].iri_factor;
+        if (meshes[mi].iri_color_tex_index >= 0 &&
+            meshes[mi].iri_color_tex_index < num_textures && textures) {
+            film_w *= sample_linear3(&textures[meshes[mi].iri_color_tex_index],
+                                     m_uv[0], m_uv[1]).x;
+        }
         if (film_w > 1.0f) film_w = 1.0f;
         film = tf_eval_iridescence(1.0f, meshes[mi].iri_ior, cv, d_nm, bf0);
         V film_f0 = tf_schlick_to_f0(film, 1.0f, cv);

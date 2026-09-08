@@ -1099,7 +1099,17 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                      gr *= gr;
                      bf0 = sc_col * gr;
                  }
-                 film_w = min(mats[iri_mid].iri_factor, 1.0f);
+                  /* iridescenceTexture: R modulates the film factor (spec +
+                     three.js: "iridescence = iridescenceFactor *
+                     iridescenceTexture.r", linear data, raw /255).  Same
+                     sampler pairing as ORM/AO/normal (hardware bilinear). */
+                  float fw = mats[iri_mid].iri_factor;
+                  if (mats[iri_mid].iri_color_tex_index >= 0 &&
+                      mats[iri_mid].iri_color_tex_index < num_textures &&
+                      mats[iri_mid].iri_color_tex_index < MAXTEX) {
+                      fw *= sample_linear(scene_tex.t[mats[iri_mid].iri_color_tex_index], mesh_uv).r;
+                  }
+                  film_w = min(fw, 1.0f);
                  float3 filmv = tf_eval_iridescence(1.0f, mats[iri_mid].iri_ior, cv, d_nm, bf0);
                  float3 filmf0 = tf_schlick_to_f0(filmv, 1.0f, cv);
                  f0u = f0 * (1.0f - film_w) + filmf0 * film_w;
