@@ -71,7 +71,7 @@ The glTF test scenes (lamp, dragon, dish, suzanne, …) live in
 | KHR_materials_ior | Done |
 | KHR_materials_volume (Beer–Lambert absorption) | Done (ray-traced path length, both backends) |
 | Punctual lights (KHR_lights_punctual) | — |
-| KHR_materials_iridescence (thin film, three.js parity model) | Done (both backends) |
+| KHR_materials_iridescence (thin film, three.js parity model; texture-driven factor + thickness, both slots) | Done (both backends) |
 | glTF baseColorTexture (sRGB→linear, bilinear) | Done |
 | glTF ORM roughness (G channel × factor) | Done (linear sampling both backends) |
 | Unified per-pixel PBR (unified plastic/metallic, ORM.B → metallic, F0 = mix(0.04, basecolor, metallic)) | Done |
@@ -123,16 +123,19 @@ nextsteps.md.)
 
 ## Next Steps
 
-**Next work item:** [glass_parity_nextsteps.md](glass_parity_nextsteps.md) —
-close the glass light-transport CPU/GPU divergence (recursive vs iterative
-traversal) driving the lamp (3.45%) and dragon (5.94%) parity floors. The
-envtest bug (the last `known-bug`) is fixed; the full gate is green.
+**Next work item:** Phase 6 polish (see iridescent_dish_nextsteps.md) —
+exposure sweep vs the reference luminance, and the scene-lighting /
+looks-dev decision for the gold plate + dark frame (the plate-looks
+diagnostic: bright floor material or env intensity, not a shading-term
+change). The glass light-transport divergence is closed
+([glass_parity_nextsteps.md](glass_parity_nextsteps.md), 2026-09-05) and
+the iridescence color lobe landed (2026-09-08); the full gate is green.
 
 Other plan documents, newest first:
 
 - [iridescent_dish_nextsteps.md](iridescent_dish_nextsteps.md) — the active
   plan, anchored on **IridescentDishWithOlives** (IBL, normal maps, MASK,
-  iridescence color lobe). Phase 1 (opt-in floor + background color) landed.
+  iridescence color lobe). Phases 1–5 landed; Phase 6 (polish) is open.
 - [dragon_nextsteps.md](dragon_nextsteps.md) — DragonAttenuation record:
   in-medium surface-term fix, transmission model, framing.
 - [nextsteps.md](nextsteps.md) — the IridescenceLamp history (PBR

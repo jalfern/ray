@@ -266,15 +266,20 @@ is not gateable). First suspicion if denoised output ever smears darks.
    is ignored (item 5). Note the ORM says metallic ≈ 0.098 (G channel = 25)
    — the gold look in the reference is *basecolor diffuse + IBL*, not
    metalness, which makes item 1 decisive.
-4. **Dish glass too dark/green.** Reference: near-neutral glass with a
-   rainbow band on the rim. Ours: uniform dark-green cast. Root cause: the
-   **iridescence color lobe is not parsed** — `iridescenceTexture` (RGB)
-   modulates the film; only `iridescenceThicknessTexture` (B) is parsed.
-   Measured: `glassdish_irid.png` R channel mean 101/255 with dark regions
-   (suppresses the film where the reference dish is neutral); G/B ≈ 218
-   (thickness ≈ 543 nm, near-uniform). Second-order: the dish's standalone
-   `occlusionTexture` (R of goldleaf_orm, real variation) is ignored
-   (our AO only comes from the metallicRoughnessTexture R).
+ 4. **Dish glass too dark/green.** Reference: near-neutral glass with a
+    rainbow band on the rim. Ours: uniform dark-green cast. Root cause: the
+    ~~**iridescence color lobe is not parsed** — `iridescenceTexture` (RGB)
+    modulates the film; only `iridescenceThicknessTexture` (B) is parsed.
+    Measured: `glassdish_irid.png` R channel mean 101/255 with dark regions
+    (suppresses the film where the reference dish is neutral); G/B ≈ 218
+    (thickness ≈ 543 nm, near-uniform).~~ **FIXED (Phase 5, 2026-09-08):**
+    the color slot now modulates the film factor (see Phase 5 landed).
+    Second-order: ~~the dish's standalone `occlusionTexture` (R of
+    goldleaf_orm, real variation) is ignored~~ — **FIXED (Phase 3 Stage 4)**;
+    on glassDish it is pixel-inert (transmission-gated to ×0). Residual
+    darkness after Phase 5 is scene-lighting (studio_dome @3.0 vs the
+    reference's studio env — see the plate-looks diagnostic), not a
+    shading-term gap.
 5. **Normal maps ignored.** `olives_nrm` (512², skin bumps), `goldleaf_nrm`
    (2048²), `glasscover_nrm` (**scale 2.0**, wavy ripples clearly visible on
    the reference dome as broken-up highlights). The reference dome's
@@ -429,18 +434,37 @@ page-fault false positives — neither scene carries material textures, so
 the GPU was genuinely running; both are real CPU-vs-GPU readings (envtest
 since superseded by 4.08%, suzanne by 13.88% at HEAD).]
 
-### Phase 5 — Iridescence color lobe
+### Phase 5 — Iridescence color lobe — DONE 2026-09-08
 
-5.1 Parse `iridescenceTexture` (RGB) into the material (new `iri_color_tex`
-field, same plumbing pattern).
-5.2 Multiply the thin-film F0 response per channel before the
-`iri_factor` blend (glTF KHR_materials_iridescence: the RGB texture
-modulates the iridescence effect). Expect: dish cast relaxes to the
-reference's neutral glass + rim band; cover bands strengthen.
-5.3 If the cover bands are still off after 1+2+3+5, probe the film model
-against vendored three.js `evalIridescence` (citation in item 6) — parity
-was established for the lamp (factor-only); this asset adds texture-driven
-thickness + color.
+5.1 **DONE: parse + plumb `iridescenceTexture`** (two commits, per the
+phase3_plan staging pattern). Plumbing commit first (0-px gate: all five
+gate scenes byte-identical, both backends), then the shading commit.
+
+5.2 **DONE: factor modulation, not per-channel F0.** The staged wording
+("multiply the thin-film F0 response per channel") was pinned against the
+source of record before coding: the KHR_materials_iridescence spec and the
+vendored three.js both treat the RGB texture as a **scalar** modulation of
+the film factor — `iridescence = iridescenceFactor * iridescenceTexture.r`,
+linear data, raw /255, no transfer function; no texture => 1.0. Landed as
+`film_w = clamp(iri_factor * tex.r, 0, 1)` in both backends (CPU
+`sample_linear3(...).x` / GPU `sample_linear(...).r` — the pre-existing
+ORM/AO/normal sampler pairing). The dish's two glass mats point both the
+color and thickness slots at ONE image each (glassdish_irid /
+glasscover_irid), now deduped to one textures[] entry each; the lamp
+family (thickness slot only) is byte-identical — sentinel path proven.
+Visual: the dome's uniform magenta/teal cast relaxes to neutral glass
+with pastel rim bands, olives read through the cover (direction matches
+the reference; residual saturation gap is scene-lighting, see item 4).
+
+5.3 **NOT TRIGGERED.** The probe was conditional on "bands still off";
+they now read, and thin_film.h is the line-for-line three.js
+evalIridescence port, so no model gap to chase.
+
+Gate (four-row, 20 renders, backend lines verified): commit delta 8/8
+byte-identical on the four no-iri-texture scenes; dish256 moved on both
+backends (6845/6852 px, max 103 — agreeing across backends);
+cross-backend dish256 re-baselined to **311/468/10/10/0** (p99_9=10,
+severe=0 -> ok), envtest unchanged at baseline. No-arg gate PASS.
 
 ### Phase 6 — Polish
 
@@ -479,8 +503,8 @@ python3 tools/ppm_diff.py /tmp/e_cpu.ppm /tmp/e_gpu.ppm
 
 # material plumbing check
 ./ray2 --cpu test_scenes/scene_iri_dish.json --mesh-stats 2>&1 | grep '\[gltf:mat\]'
-# expect: idx=0 transmission=1 iri=1 iri_nm=[500,550] iri_tex=0
-#         idx=2 transmission=1 ior=1.500 iri_tex=6 vol_th=0.1 vol_tex=5
+# expect: idx=0 transmission=1 iri=1 iri_nm=[500,550] iri_tex=0 iri_color_tex=0
+#         idx=2 transmission=1 ior=1.500 iri_tex=6 iri_color_tex=6 vol_th=0.1 vol_tex=5
 
 # side-by-side (reference must be PNG — convert the JPG once:
 # python3 -c "from PIL import Image; Image.open('test_scenes/IridescentDishWithOlives/screenshot_Large.jpg').save('/tmp/iri_ref.png')")
