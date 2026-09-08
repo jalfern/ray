@@ -884,6 +884,7 @@ typedef struct {
     int tex_coord;         /* UV set index (0 = TEXCOORD_0) */
     int metallic_roughness_tex; /* texture index, -1 = none */
     int iri_tex;           /* thickness texture index, -1 = none */
+    int iri_color_tex;     /* iridescenceTexture index (factor modulation), -1 = none */
     int vol_tex;           /* thicknessTexture index, -1 = none (parsed, reported only) */
     int ao_tex;            /* occlusionTexture index, -1 = none */
     int normal_tex;        /* normalTexture index, -1 = none */
@@ -1176,6 +1177,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].tex_coord = 0;
         mats[n].metallic_roughness_tex = -1;
         mats[n].iri_tex = -1;
+        mats[n].iri_color_tex = -1;
         mats[n].vol_th = 0.0f;
         mats[n].att_r = 1.0f;
         mats[n].att_g = 1.0f;
@@ -1406,6 +1408,28 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                                 float fv; if (parse_json_number(&ix, &fv)) mats[n].iri_thin_min = fv;
                             } else if (strcmp(ik, "iridescenceThicknessMaximum") == 0) {
                                 float fv; if (parse_json_number(&ix, &fv)) mats[n].iri_thin_max = fv;
+                            } else if (strcmp(ik, "iridescenceTexture") == 0) {
+                                const char* tx = ix;
+                                skip_ws_ptr(&tx);
+                                if (*tx == '{') tx++;
+                                while (*tx && *tx != '}') {
+                                    char tk[64];
+                                    const char* tsave = tx;
+                                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ':') tx++;
+                                    skip_ws_ptr(&tx);
+                                    float fv;
+                                    if (strcmp(tk, "index") == 0) {
+                                        if (parse_json_number(&tx, &fv)) mats[n].iri_color_tex = (int)fv;
+                                    } else {
+                                        skip_value(&tx);
+                                    }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ',') tx++;
+                                }
+                                if (*tx == '}') tx++;
+                                ix = tx;
                             } else if (strcmp(ik, "iridescenceThicknessTexture") == 0) {
                                 const char* tx = ix;
                                 skip_ws_ptr(&tx);
@@ -1505,11 +1529,11 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         if (*obj == '}') obj++;
 
         if (g_gltf_debug_enabled) {
-            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d nrm_tex=%d nrm_scale=%.6g alpha_mode=%d alpha_cutoff=%.6g\n",
+            fprintf(stderr, "  [gltf:mat] idx=%d transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d iri_color_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d nrm_tex=%d nrm_scale=%.6g alpha_mode=%d alpha_cutoff=%.6g\n",
                     n, mats[n].transmission, mats[n].ior,
                     mats[n].iri_factor, mats[n].iri_ior,
                     mats[n].iri_thin_min, mats[n].iri_thin_max,
-                    mats[n].iri_tex,
+                    mats[n].iri_tex, mats[n].iri_color_tex,
                     mats[n].vol_th,
                     mats[n].att_r, mats[n].att_g, mats[n].att_b,
                     mats[n].att_dist, mats[n].vol_tex,
@@ -1741,6 +1765,7 @@ static void build_gltf_scene(
                 mo->tex_index = -1;
                 mo->orm_tex_index = -1;
                 mo->iri_tex_index = -1;
+                mo->iri_color_tex_index = -1;
                 mo->vol_th = 0.0f;
                 mo->att_r = 1.0f;
                 mo->att_g = 1.0f;
@@ -1791,6 +1816,14 @@ static void build_gltf_scene(
                                 mo->iri_tex_index = img_idx;
                         }
                     }
+                    if (materials[mat_idx].iri_color_tex >= 0) {
+                        int tex_idx = materials[mat_idx].iri_color_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->iri_color_tex_index = img_idx;
+                        }
+                    }
                     if (materials[mat_idx].vol_tex >= 0) {
                         int tex_idx = materials[mat_idx].vol_tex;
                         if (tex_idx < num_tex) {
@@ -1832,14 +1865,14 @@ static void build_gltf_scene(
 
                 /* Debug: print final material props */
                 if (g_gltf_debug_enabled) {
-                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
+                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d iri_color_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
                             out->num_meshes, mat_idx,
                             base_color[0], base_color[1], base_color[2], base_color[3],
                             metallic, roughness,
                             emissive[0], emissive[1], emissive[2],
                             transmission, ior,
                             iri_factor, iri_ior, iri_min, iri_max,
-                            mo->iri_tex_index,
+                            mo->iri_tex_index, mo->iri_color_tex_index,
                             vol_th,
                             att_r, att_g, att_b,
                             att_dist, mo->vol_tex_index);

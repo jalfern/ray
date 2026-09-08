@@ -1237,6 +1237,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].tex_index = scene->meshes[i].tex_index;
             meshes[i].orm_tex_index = scene->meshes[i].orm_tex_index;
             meshes[i].iri_tex_index = scene->meshes[i].iri_tex_index;
+            meshes[i].iri_color_tex_index = scene->meshes[i].iri_color_tex_index;
             meshes[i].iri_factor = scene->meshes[i].iri_factor;
             meshes[i].iri_ior = scene->meshes[i].iri_ior;
             meshes[i].iri_thin_min = scene->meshes[i].iri_thin_min;

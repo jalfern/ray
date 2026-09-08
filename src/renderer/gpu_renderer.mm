@@ -176,6 +176,7 @@ typedef struct {
     int tex_index;
     int orm_tex_index;
     int iri_tex_index;
+    int iri_color_tex_index;
     float iri_factor;
     float iri_ior;
     float iri_thin_min;
@@ -199,7 +200,7 @@ static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal"
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(TexMeta) == 12, "TexMeta layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 128, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 132, "MeshMatGpu layout must match shaders.metal");
 static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
@@ -388,6 +389,7 @@ Image* render_frame_gpu(const Scene* scene) {
                   mats[m].tex_index = mo->tex_index;
                   mats[m].orm_tex_index = mo->orm_tex_index;
                   mats[m].iri_tex_index = mo->iri_tex_index;
+                   mats[m].iri_color_tex_index = mo->iri_color_tex_index;
                    mats[m].iri_factor = mo->iri_factor;
                    mats[m].iri_ior = mo->iri_ior;
                    mats[m].iri_thin_min = mo->iri_thin_min;

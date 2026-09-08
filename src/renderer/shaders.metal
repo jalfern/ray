@@ -341,6 +341,7 @@ struct MeshMat {
     int tex_index;
     int orm_tex_index;
     int iri_tex_index;
+    int iri_color_tex_index;
     float iri_factor;
     float iri_ior;
     float iri_thin_min;
@@ -358,7 +359,7 @@ struct MeshMat {
     float alpha_cutoff;
 };
 
-static_assert(sizeof(MeshMat) == 128, "MeshMat size must match gpu_renderer.mm");
+static_assert(sizeof(MeshMat) == 132, "MeshMat size must match gpu_renderer.mm");
 
 /* MASK alpha test, bit-exact mirror of the CPU chain (renderer.cc
    sample_alpha + the hit_mesh_bvh leaf test, D2/D3): barycentric->UV

@@ -45,6 +45,7 @@ typedef struct {
     int tex_index;
     int orm_tex_index;
     int iri_tex_index;
+    int32_t iri_color_tex_index; /* iridescenceTexture image index (factor modulation), -1 = none */
     float iri_factor;
     float iri_ior;
     float iri_thin_min;
