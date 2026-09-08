@@ -191,6 +191,34 @@ sharp (primary-ray) path, which was never affected.
 float-rounding floor). All other scenes (dish, suzanne, dragon, lamp) unchanged
 at their exact baselines — the change is isolated to the env-sampling path.
 
+## Output color space: Reinhard + sRGB encode (2026-09-08)
+
+`tone_map` (both backends) now applies the sRGB encode after Reinhard,
+mirroring the reference's display-referred pipeline (tone map +
+linear->sRGB output encoding). Without the encode every midtone displayed
+~3x dark (linear 0.18 -> 39/255) and texture detail collapsed into the
+bottom ~15% of code values — the "flat-shaded olives" reading was mostly
+this, not a texture-wiring gap (all four olive textures were verified
+live before the change).
+
+**Cross-backend floor moved with this commit** (max_channel_err 2 -> 11
+on dish, 3 -> 5 on envtest; both re-baselined to `ok`, see
+tools/parity_baselines.txt). Cause: the encode's pow() branch. CPU uses
+`powf`, Metal uses `pow`; where the two differ by 1-2 ULP the encode's
+steep dark-end slope amplifies the difference into visible code values
+(dish 308/59904 px = 0.51% differ, envtest 704/480000 = 0.15%). The tail
+stays sparse and shallow — p99_9 11/5 vs the cert floor 22, n_severe=0 —
+so this is amplification of the existing float-rounding floor, not a new
+divergence.
+
+**Known bug (latent): the CPU denoiser filters encoded bytes.**
+`apply_denoise` runs on the post-tone_map+encode 8-bit buffer, so when a
+scene enables `"denoise"` the filter operates on sRGB-encoded values
+rather than linear radiance (edge-stopping statistics see compressed
+darks). Invisible in the parity gate (no gate scene enables denoise;
+`scenes/test_marble_bunny.json` is the only scene JSON that does, and it
+is not gateable). First suspicion if denoised output ever smears darks.
+
 ## Delta analysis (reference vs current render, ranked by visual impact)
 
 1. **No IBL (biggest gap).** ~~The reference is lit by the studio

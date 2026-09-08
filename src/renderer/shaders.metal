@@ -300,9 +300,16 @@ static float3 env_procedural(float3 d) {
     return col;
 }
 
+/* Mirror of renderer.cc tone_map: Reinhard then sRGB encode. */
+static float lin_to_srgb(float c) {
+    return c <= 0.0031308f ? c * 12.92f
+                          : 1.055f * pow(c, 1.0f / 2.4f) - 0.055f;
+}
+
 static float3 tone_map(float3 c, float exposure) {
     float3 s = c * exposure;
-    return s / (1.0f + s);
+    s = s / (1.0f + s);
+    return float3(lin_to_srgb(s.x), lin_to_srgb(s.y), lin_to_srgb(s.z));
 }
 
 static float3 area_light_sample(float3 lp, float size, int sample_idx) {

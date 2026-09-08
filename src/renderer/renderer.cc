@@ -416,9 +416,21 @@ static V sample_linear3(ImageTexture* tex, float u, float v) {
     return (V){r, g, b};
 }
 
+/* Display-referred output curve, mirrored line-for-line in shaders.metal.
+   Reinhard then sRGB encode: three.js tone-maps AND applies linear->sRGB
+   output encoding; without the encode every midtone displays ~3x dark
+   (0.18 -> 39/255) and texture detail collapses into the bottom code values.
+   pow domain is safe: Reinhard keeps positive channels below 1, and the
+   <=0.0031308 branch takes negatives without touching pow. */
+static float lin_to_srgb(float c) {
+    return c <= 0.0031308f ? c * 12.92f
+                          : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+}
+
 static V tone_map(V c, float exposure) {
     V s = mul(c, exposure);
-    return (V){s.x / (1.0f + s.x), s.y / (1.0f + s.y), s.z / (1.0f + s.z)};
+    s = (V){s.x / (1.0f + s.x), s.y / (1.0f + s.y), s.z / (1.0f + s.z)};
+    return (V){lin_to_srgb(s.x), lin_to_srgb(s.y), lin_to_srgb(s.z)};
 }
 
 static V area_light_sample(V light_pos, float light_size, int sample_idx) {
