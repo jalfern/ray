@@ -211,6 +211,24 @@ stays sparse and shallow — p99_9 11/5 vs the cert floor 22, n_severe=0 —
 so this is amplification of the existing float-rounding floor, not a new
 divergence.
 
+**The gold plate's look is scene-lighting-dependent, not a shading bug —
+do not chase the tone curve for it (2026-09-08 diagnostic).** The plate
+(goldLeaf) is roughness-0 / metallic-1.0 (goldleaf_orm: G=0, B=255) with a
+uniform gold baseColor, i.e. a mirror whose F0 is gold-tinted — its look is
+"whatever it mirrors, tinted gold". Measured: raising env intensity
+1.0->10.0 (same camera/seed, CPU) brightened the plate band +47% (mean R
+127->187, still R>G>B) — brightness tracks the environment, as a mirror
+should. Two diagnostic renders that are INVALID and should not be re-run
+naively: (a) `"background": [0.8,0.8,0.8]` is not an env source for
+reflection rays — with an env map present, reflection rays sample the env
+(renderer.cc, `has_bg_color && !(env && env->data)` guard); (b) `"floor":
+true` is the dark green checkerboard, which the plate duly mirrored
+(green-grey cast). The reference's saturated gold comes from the white
+studio floor under the dish (bright lower hemisphere) plus the viewer's
+own tone curve; our scene gives the mirror no bright target. Closing the
+gap is a scene-lighting / looks-dev decision (bright floor material? env
+intensity?), not a shading-term change.
+
 **Known bug (latent): the CPU denoiser filters encoded bytes.**
 `apply_denoise` runs on the post-tone_map+encode 8-bit buffer, so when a
 scene enables `"denoise"` the filter operates on sRGB-encoded values
