@@ -938,6 +938,15 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         smetal = smetal * orm.b;
                         sao = orm.r;
                     }
+                    /* Standalone occlusionTexture (glTF): AO is the R channel of
+                       whatever image sits in the occlusionTexture slot, overriding
+                       ORM.R when both are set (CPU twin: renderer.cc AO branch).
+                       ao==orm (one image in both slots) re-samples the same
+                       texture bit-identically. */
+                    if (mats[midx].ao_tex_index >= 0 && mats[midx].ao_tex_index < num_textures &&
+                        mats[midx].ao_tex_index < MAXTEX) {
+                        sao = sample_linear(scene_tex.t[mats[midx].ao_tex_index], mesh_uv).r;
+                    }
                 }
             }
 

@@ -324,10 +324,11 @@ static float sample_iri_thickness(ImageTexture* tex, float u, float v) {
     return (1-ry)*((1-rx)*g00 + rx*g10) + ry*((1-rx)*g01 + rx*g11);
 }
 
-/* Normal map: linear data in RGB (tangent-space perturbation).  Bilinear,
-   wrap-repeat, no transfer function — same index math as
-   sample_iri_thickness, all three channels. */
-static V sample_normal_map(ImageTexture* tex, float u, float v) {
+/* Linear-RGB data sampler, raw /255, no transfer function — the CPU twin
+   of the GPU's sample_linear (shaders.metal).  Normal maps read all three
+   channels (tangent-space perturbation); standalone AO reads R only.
+   Bilinear, wrap-repeat — same index math as sample_iri_thickness. */
+static V sample_linear3(ImageTexture* tex, float u, float v) {
     u = u - floorf(u);
     v = v - floorf(v);
     float fx = u * tex->width - 0.5f;
@@ -725,6 +726,16 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             sphere_metallic = sphere_metallic * orm_b;
             sphere_ao = orm_r;
         }
+        /* Standalone occlusionTexture (glTF): AO is the R channel of
+           whatever image sits in the occlusionTexture slot.  When both
+           slots are set it overrides ORM.R; when they name the same image
+           the re-read is bit-identical (sample_linear3 is op-identical to
+           the ORM block above — same index math, same raw /255 lerp).
+           GPU twin: shaders.metal, immediately after its ORM sample. */
+        if (meshes[mi].ao_tex_index >= 0 && meshes[mi].ao_tex_index < num_textures && textures) {
+            sphere_ao = sample_linear3(&textures[meshes[mi].ao_tex_index],
+                                       m_uv[0], m_uv[1]).x;
+        }
     }
 
     /* Tangent-space normal perturbation (glTF normalTexture).  The frame is
@@ -744,8 +755,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             float sw = (m_tan[3] >= 0.0f) ? 1.0f : -1.0f; /* bitangent handedness */
             V Tp = norm(sub(T, mul(Ns, dot(T, Ns))));  /* Gram-Schmidt on tangent */
             V Bp = norm(mul(cross(Ns, Tp), sw));       /* sign survives re-ortho */
-            V c = sample_normal_map(&textures[meshes[mi].nrm_tex_index],
-                                    m_uv[0], m_uv[1]);
+            V c = sample_linear3(&textures[meshes[mi].nrm_tex_index],
+                                 m_uv[0], m_uv[1]);
             float s = meshes[mi].nrm_scale;
             float mx = (2.0f * c.x - 1.0f) * s;
             float my = (2.0f * c.y - 1.0f) * s;

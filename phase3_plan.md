@@ -413,7 +413,7 @@ scenes byte-identical on both backends (fix is bg-gated); dish256 — the
 only bg+env scene — legitimately moved and was re-baselined to
 155/173/2/2/0 (p99_9=2, n_severe=0 -> ok). No-arg gate PASS.
 
-### Stage 4 — Standalone AO
+### Stage 4 — Standalone AO — DONE 2026-09-07
 
 - CPU: in the ORM block (`renderer.cc:654-680`), `ao_tex_index >= 0` →
   sample its R (linear) as `sphere_ao`; else the existing ORM.R. ORM G/B
@@ -436,6 +436,51 @@ only bg+env scene — legitimately moved and was re-baselined to
   legitimately move → re-baseline, do not treat nonzero as a bug.
   (Optional: a small synthetic scene with a *separate* AO image to
   exercise the non-fallback branch — new asset, only if wanted.)
+
+**Landed (2026-09-07), against the staged plan above:**
+
+- CPU (`renderer.cc`): AO branch added after the ORM `if`, inside the
+  `hit_type == 2` block — `ao_tex_index >= 0` samples its R (linear,
+  raw /255) via the Stage 3 sampler, renamed `sample_normal_map` →
+  `sample_linear3` (name now matches the GPU's `sample_linear`; pure
+  rename, zero pixel effect). Where AO slot == ORM slot the branch
+  re-reads the *same textures[] entry* bit-identically: the parser
+  dedups by image source and every asset with both slots names ONE
+  texture entry for them (verified in dish, lamp, BoomBox,
+  WaterBottle), so `ao_tex_index == orm_tex_index` exactly, and the
+  sampler math is the same op-for-op chain — cannot drift.
+- GPU (`shaders.metal`): mirror block after the ORM sample,
+  `sample_linear(scene_tex.t[ao], mesh_uv).r`; ao==orm re-samples the
+  same texture object → bit-identical.
+- Premise correction (measured, not assumed): dish256 does NOT move.
+  glassDish — the only mesh where the branch is non-fallback (AO slot
+  set, ORM slot empty) — has `transmissionFactor: 1.0`, and every
+  AO consumer (glass diffuse, emissive, ambient/IBL) multiplies by
+  `(1 - glass_trans) = 0`. The new read is pixel-inert on every gate
+  scene; the staged "may legitimately move" turned out to be a true
+  no-op everywhere. No re-baseline needed.
+- Probe (throwaway, not committed): dish256 copied with glassDish
+  transmission 0.5 → AO stops being ×0. HEAD-vs-new moved 19121 px
+  (CPU) / 19123 px (GPU), max 40, p99_9 32, n_severe 0 — the branch
+  is live on both backends and they agree (deltas match within 2 px;
+  new CPU-vs-GPU 190 px / max 2 / p99_9 2 / severe 0, same magnitude
+  as the scene's recorded floor). Kept as the record that the
+  non-fallback branch is exercised but has ZERO pixel coverage in the
+  gate set (all five scenes are identical-reread, AO-absent, or
+  transmission-gated to ×0) — a Stage 6 candidate if gate coverage of
+  the branch is wanted.
+
+**Gate results (four-row harness, 20 renders, every `^backend:` line
+verified):**
+
+- Commit delta: all five gate scenes byte-identical HEAD-vs-new on
+  BOTH backends (10/10 `cmp` clean) — sentinel paths op-identical,
+  identical-rereads bit-identical, glassDish transmission-gated to ×0.
+- Cross-backend (new CPU vs new GPU): all five signatures exactly
+  equal to the recorded baselines (dish256 155/173/2/2/0, envtest
+  629/1083/3/3/0, suzanne 132/162/3/3/0, dragon
+  23353/54186/205/20/4, lamp 8627/10698/64/19/0) — zero pixels moved
+  anywhere. No-arg `tools/parity.sh` PASS on the new build.
 
 ### Stage 5 — MASK (alpha cutoff)
 
