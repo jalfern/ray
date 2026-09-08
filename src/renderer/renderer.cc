@@ -160,9 +160,49 @@ static int bbox_hit(V o, V d, const float* bmin, const float* bmax) {
     return 1;
 }
 
+/* alphaMode MASK alpha test: raw /255 linear alpha, bilinear, wrap-repeat —
+   index math mirrored operation-for-operation by the GPU twin (sample_alpha
+   in shaders.metal). Must stay bit-identical across backends: a last-bit
+   difference in the cutoff test flips WHICH surface is hit, and that pixel
+   then differs by hundreds — no channel-error bound catches that (D2). */
+static float sample_alpha(ImageTexture* tex, float u, float v) {
+    u = u - floorf(u);
+    v = v - floorf(v);
+    float fx = u * tex->width - 0.5f;
+    float fy = v * tex->height - 0.5f;
+    int ix = (int)floorf(fx);
+    int iy = (int)floorf(fy);
+    float rx = fx - ix;
+    float ry = fy - iy;
+    int x0 = (ix + tex->width * 1024) % tex->width;
+    int y0 = (iy + tex->height * 1024) % tex->height;
+    int x1 = (x0 + 1) % tex->width;
+    int y1 = (y0 + 1) % tex->height;
+    unsigned char* t = tex->data;
+    float a00 = t[(y0 * tex->width + x0) * 4 + 3] / 255.0f;
+    float a10 = t[(y0 * tex->width + x1) * 4 + 3] / 255.0f;
+    float a01 = t[(y1 * tex->width + x0) * 4 + 3] / 255.0f;
+    float a11 = t[(y1 * tex->width + x1) * 4 + 3] / 255.0f;
+    return (1-ry)*((1-rx)*a00 + rx*a10) + ry*((1-rx)*a01 + rx*a11);
+}
+
+/* Resolve a mesh's MASK texture: the baseColor image (tex_index) when the
+   material is alphaMode MASK. NULL = OPAQUE or no baseColor image — the
+   sentinel that keeps every walk op-identical to the pre-MASK code.
+   Per-mesh BVH => one material per walk, so this is resolved once per
+   walk and handed to the walk (the GPU's global BVH mirror looks the
+   material up per triangle instead). */
+static ImageTexture* mask_tex_of(MeshObjData* m, ImageTexture* textures, int num_textures) {
+    if (m->alpha_mode == 1 && m->tex_index >= 0 && m->tex_index < num_textures &&
+        textures && textures[m->tex_index].data)
+        return &textures[m->tex_index];
+    return NULL;
+}
+
 static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
                           TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx,
-                          int* side_out, float* out_tan) {
+                          int* side_out, float* out_tan,
+                          ImageTexture* mask_tex, float alpha_cutoff) {
     float best_t = 1e9f;
     int hit = 0;
     float best_u = 0, best_v = 0;
@@ -188,6 +228,18 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
                 int dbg_mesh = (mesh_idx == 1) ? 1 : -1;
                 int dbg_tri = (mesh_idx == 1) ? i : -1;
                 if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &ti, &u, &v, dbg_mesh, dbg_tri) && ti < best_t) {
+                    /* alphaMode MASK: a candidate whose interpolated baseColor
+                       alpha is below alphaCutoff is discarded (D3). u/v are
+                       BARYCENTRIC coords — interpolate the triangle's UVs
+                       first, same t0/t1/t2 chain used after a hit. A
+                       discarded candidate does NOT claim best_t: a farther
+                       triangle behind the crack (or nothing) wins instead. */
+                    if (mask_tex) {
+                        float mw = 1.0f - u - v;
+                        float mu = mw * tris[i].t0[0] + u * tris[i].t1[0] + v * tris[i].t2[0];
+                        float mv = mw * tris[i].t0[1] + u * tris[i].t1[1] + v * tris[i].t2[1];
+                        if (sample_alpha(mask_tex, mu, mv) < alpha_cutoff) continue;
+                    }
                     best_t = ti; hit = 1; best_tri = &tris[i]; best_u = u; best_v = v;
                     if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_hits[mesh_idx]++;
                 }
@@ -227,7 +279,8 @@ static int hit_mesh_bvh(V o, V d, float *t, V *hit_normal, float* out_uv,
 }
 
 static int hit_mesh_bvh_any(V o, V d, float max_t,
-                              TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx) {
+                              TriGpu* tris, BvhNode* nodes, int /*num_nodes*/, int mesh_idx,
+                              ImageTexture* mask_tex, float alpha_cutoff) {
     int stack[64];
     int sp = 0;
     stack[sp++] = 0;
@@ -247,6 +300,15 @@ static int hit_mesh_bvh_any(V o, V d, float max_t,
                 int dbg_tri = (mesh_idx == 1) ? i : -1;
                 if (hit_tri(o, d, tris[i].v0, tris[i].v1, tris[i].v2, &t, &u, &v, dbg_mesh, dbg_tri) &&
                     t < max_t && t > EPS) {
+                    /* MASK applies to shadow/visibility rays too (D3): a crack
+                       that passes a camera ray must pass the shadow ray, or the
+                       gold leaf casts a solid shadow. */
+                    if (mask_tex) {
+                        float mw = 1.0f - u - v;
+                        float mu = mw * tris[i].t0[0] + u * tris[i].t1[0] + v * tris[i].t2[0];
+                        float mv = mw * tris[i].t0[1] + u * tris[i].t1[1] + v * tris[i].t2[1];
+                        if (sample_alpha(mask_tex, mu, mv) < alpha_cutoff) continue;
+                    }
                     if (mesh_idx >= 0 && mesh_idx < 256) g_hit_tri_hits[mesh_idx]++;
                     return 1;
                 }
@@ -435,7 +497,8 @@ static V sample_emissive_mesh(TriGpu* tris, float* tri_cdf, int num_tris, float 
 static int emissive_visible(V p, V light_pos, float light_dist,
                             SphereData* spheres, int num_spheres,
                             MeshObjData* meshes, int num_meshes,
-                            int skip_sphere, int skip_mesh) {
+                            int skip_sphere, int skip_mesh,
+                            ImageTexture* textures, int num_textures) {
     V to_light = sub(light_pos, p);
     float ld = light_dist > 0 ? light_dist : sqrtf(dot(to_light, to_light));
     V ray_dir = norm(to_light);
@@ -451,7 +514,9 @@ static int emissive_visible(V p, V light_pos, float light_dist,
         if (m == skip_mesh) continue;
         if (meshes[m].num_bvh_nodes > 0 &&
             hit_mesh_bvh_any(ray_o, ray_dir, ld - 1e-4f,
-                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m))
+                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m,
+                             mask_tex_of(&meshes[m], textures, num_textures),
+                             meshes[m].alpha_cutoff))
             return 0;
     }
     return 1;
@@ -459,7 +524,8 @@ static int emissive_visible(V p, V light_pos, float light_dist,
 
 static float in_shadow(V p, LightData light, SphereData* spheres, int num_spheres,
                        MeshObjData* meshes, int num_meshes, int sample_idx,
-                       int skip_sphere, int skip_mesh) {
+                       int skip_sphere, int skip_mesh,
+                       ImageTexture* textures, int num_textures) {
     V light_pos = area_light_sample(light.pos, light.size, sample_idx);
     V to_light = sub(light_pos, p);
     float light_dist = sqrtf(dot(to_light, to_light));
@@ -477,7 +543,9 @@ static float in_shadow(V p, LightData light, SphereData* spheres, int num_sphere
         if (m == skip_mesh) continue;
         if (meshes[m].num_bvh_nodes > 0 &&
             hit_mesh_bvh_any(ray_o, ray_dir, light_dist,
-                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m))
+                             meshes[m].tris, meshes[m].bvh_nodes, meshes[m].num_bvh_nodes, m,
+                             mask_tex_of(&meshes[m], textures, num_textures),
+                             meshes[m].alpha_cutoff))
             return 1;
     }
     return 0;
@@ -516,7 +584,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         float tan[4] = {0,0,0,0};
         int this_side = 1;
         if (meshes[i].num_bvh_nodes > 0 &&
-            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &this_side, tan) && tmi < tm) {
+            hit_mesh_bvh(o, d, &tmi, &hit_n, uv, meshes[i].tris, meshes[i].bvh_nodes, meshes[i].num_bvh_nodes, i, &this_side, tan,
+                         mask_tex_of(&meshes[i], textures, num_textures), meshes[i].alpha_cutoff) && tmi < tm) {
             tm = tmi; mi = i; mn = hit_n; m_uv[0] = uv[0]; m_uv[1] = uv[1];
             m_tan[0] = tan[0]; m_tan[1] = tan[1]; m_tan[2] = tan[2]; m_tan[3] = tan[3];
             /* Capture `side` only for the WINNING mesh hit — hit_mesh_bvh
@@ -646,7 +715,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             V light_dir = norm(sub(light_pos, p));
             int sidx = (sample_idx << 2) | li;
             float sf = in_shadow(p, lights[li], spheres, num_spheres,
-                                 meshes, num_meshes, sidx, -1, -1);
+                                 meshes, num_meshes, sidx, -1, -1,
+                                 textures, num_textures);
             float diff = fmaxf(0.0f, dot(n_floor, light_dir));
             float lf = sf ? 0.2f : 1.0f;
             lit = add(lit, mul(base, diff * lf));
@@ -675,7 +745,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             int vis = emissive_visible(p, lp, ldist, spheres, num_spheres,
                                         meshes, num_meshes,
                                         emissive[ei].type == 0 ? emissive[ei].src_idx : -1,
-                                        emissive[ei].type == 1 ? emissive[ei].src_idx : -1);
+                                        emissive[ei].type == 1 ? emissive[ei].src_idx : -1,
+                                        textures, num_textures);
             if (vis) {
                 V le = emissive[ei].emitted;
                 V em_contrib = mul(le, G / pdf);
@@ -827,7 +898,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         float sf = in_shadow(p, lights[li], spheres, num_spheres,
                              meshes, num_meshes, sidx,
                              hit_type == 1 ? si : -1,
-                             hit_type == 2 ? mi : -1);
+                             hit_type == 2 ? mi : -1,
+                             textures, num_textures);
 
         float diff = fmaxf(0.0f, dot(n_pert, light_dir));
         V view = norm(sub(o, p));
@@ -886,7 +958,8 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         if (cos_light <= 0) continue;
         float G = cos_surf * cos_light / fmaxf(ldist * ldist, 1e-3f);
         int vis = emissive_visible(p, lp, ldist, spheres, num_spheres,
-                                    meshes, num_meshes, skip_sph, skip_mesh);
+                                    meshes, num_meshes, skip_sph, skip_mesh,
+                                    textures, num_textures);
         if (vis) {
             V le = emissive[ei].emitted;
             V em_contrib = mul(le, G / pdf);

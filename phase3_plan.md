@@ -482,7 +482,7 @@ verified):**
   23353/54186/205/20/4, lamp 8627/10698/64/19/0) — zero pixels moved
   anywhere. No-arg `tools/parity.sh` PASS on the new build.
 
-### Stage 5 — MASK (alpha cutoff)
+### Stage 5 — MASK (alpha cutoff) — DONE 2026-09-07
 
 - CPU: `hit_mesh_bvh` leaf loop — when the mesh is MASK and a candidate
   has `ti < best_t`, sample the alpha channel (hand-rolled bilinear,
@@ -494,6 +494,49 @@ verified):**
   `in_shadow` (`:415-425`), alpha sampled per D2 (spike result).
 - **Gate: commit-delta nonzero on dish (gold-leaf cracks appear);
   dish256 rebaselined.**
+
+**Landed (2026-09-07), against the staged plan above:**
+
+- CPU (`renderer.cc`): new `sample_alpha` (raw /255 alpha, bilinear,
+  wrap — index math op-for-op with `sample_texture`/`sample_linear3`);
+  new `mask_tex_of` resolves the per-mesh mask texture once per walk
+  (NULL sentinel = op-identical). `hit_mesh_bvh` and `hit_mesh_bvh_any`
+  take `(mask_tex, alpha_cutoff)`; the test sits inside the
+  `hit_tri && ti < best_t` branch, so a rejected candidate neither
+  claims `best_t` nor ends the any-hit walk — cracks pass camera,
+  shadow, and visibility rays (D3). `emissive_visible`/`in_shadow`
+  gained `(textures, num_textures)` plumbing to resolve the per-mesh
+  texture at the call sites.
+- GPU (`shaders.metal`): `mask_cut` helper = barycentric→UV interp +
+  raw-bytes bilinear, `#pragma METAL fp math_mode(safe)` INSIDE the
+  helper (spike v3 shape; per-function, not per-kernel). The GPU's
+  single global BVH looks the material up per triangle via
+  `tris[].mesh_idx` (CPU's per-mesh-BVH "one material per walk"
+  doesn't port literally — this is the mirror). Same test in the
+  primary walk, `in_shadow`, AND `emissive_visible_gpu` (the GPU twin
+  of the CPU's emissive walk; the staged text only named in_shadow).
+- D2 production shape: new `TexMeta{offset,w,h}` struct (mirrored in
+  `gpu_renderer.mm` with a `static_assert`) + one raw RGBA8 bytes
+  buffer, both bound as kernel buffers 13/14 and indexed by the SAME
+  texture index as `TexBundle`/CPU `textures[]`. Every scene texture
+  is uploaded (~75 MB on dish256, ~24 MB on lamp) — only ever read
+  for MASK materials, so non-MASK renders pay zero pixels and ~zero
+  time. Always bound (dummy when no textures).
+- **Gate (four-row harness, 20 renders, every `^backend:` line
+  verified):**
+  - Commit delta: envtest, suzanne, dragon, lamp **byte-identical**
+    HEAD-vs-new on BOTH backends (8/8 `cmp` clean). dish256 moved on
+    both backends (CPU 1143 px, 25 channels ≥127 — the flip-which-surface
+    signature D2 predicted; cracks + dappling under the leaf).
+    Attribution probe: dish256 copied with `alphaMode: MASK` stripped
+    → byte-identical HEAD-vs-new on both backends, so the full-scene
+    delta is 100% the mask test, nothing else in the commit.
+  - Cross-backend (new CPU vs new GPU): all five at-or-under the
+    recorded baselines — dish256 151/170/2/2/0 (rebaselined, slightly
+    UNDER the old 155/173/2/2/0 floor; p99_9=2, severe=0 → `ok`),
+    envtest 629/1083/3/3/0, suzanne 132/162/3/3/0, dragon
+    23353/54186/205/20/4, lamp 8627/10698/64/19/0. No-arg
+    `tools/parity.sh` PASS on the new build.
 
 ### Stage 6 — Close-out
 

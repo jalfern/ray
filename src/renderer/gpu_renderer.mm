@@ -151,6 +151,17 @@ typedef struct {
     int tri_start, tri_end, cdf_offset, src_idx;
 } EmissiveGpu;
 
+/* Per-texture raw-byte lookup for the MASK alpha test (D2).  Mirrors the
+   TexBundle texture array: tex_meta[i] describes scene->textures[i] (the
+   same index the CPU's textures[tex_index] sampler and TexBundle.t[tex_index]
+   use).  offset = start of this image's RGBA8 bytes in the tex_raw buffer;
+   w == 0 = slot has no image (never sampled). */
+typedef struct {
+    int offset;
+    int w;
+    int h;
+} TexMeta;
+
 typedef struct {
     float col[3];
     float ref;
@@ -187,6 +198,7 @@ static_assert(sizeof(CameraGpu) == 32, "CameraGpu layout must match shaders.meta
 static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal");
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
+static_assert(sizeof(TexMeta) == 12, "TexMeta layout must match shaders.metal");
 static_assert(sizeof(MeshMatGpu) == 128, "MeshMatGpu layout must match shaders.metal");
 static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
@@ -605,8 +617,49 @@ Image* render_frame_gpu(const Scene* scene) {
               }
           }
 
+           // --- MASK alpha test (Stage 5, D2): a raw RGBA8 byte mirror of every
+           //     scene texture plus a (offset,w,h) table, both indexed by the same
+           //     texture index as TexBundle / the CPU's textures[].  The shader's
+           //     mask_cut reads these instead of TexBundle.t so the alpha cutoff
+           //     test is bit-identical to the CPU sampler (hardware unorm->float
+           //     + fast-math lerp drift ~1 ULP and can flip which surface a ray
+           //     hits — see tools/spike_alpha_read.mm).  Only MASK materials ever
+           //     read it, but it is always bound (dummy when no textures). ---
+          size_t raw_total = 0;
+          TexMeta texMeta[RAY_MAXTEX];
+          for (int i = 0; i < RAY_MAXTEX; i++) { texMeta[i].offset = -1; texMeta[i].w = 0; texMeta[i].h = 0; }
+          for (int i = 0; i < scene->num_textures && i < RAY_MAXTEX; i++) {
+              ImageTexture* it = &scene->textures[i];
+              if (it->data && it->width > 0 && it->height > 0) {
+                  texMeta[i].offset = (int)raw_total;
+                  texMeta[i].w = it->width;
+                  texMeta[i].h = it->height;
+                  raw_total += (size_t)it->width * it->height * 4;
+              }
+          }
+          size_t raw_len = raw_total > 0 ? raw_total : sizeof(dummy);
+          unsigned char* raw = (unsigned char*)malloc(raw_len);
+          memset(raw, 0, raw_len);
+          {
+              size_t off = 0;
+              for (int i = 0; i < scene->num_textures && i < RAY_MAXTEX; i++) {
+                  ImageTexture* it = &scene->textures[i];
+                  if (it->data && it->width > 0 && it->height > 0) {
+                      size_t n = (size_t)it->width * it->height * 4;
+                      memcpy(raw + off, it->data, n);
+                      off += n;
+                  }
+              }
+          }
+          id<MTLBuffer> texMetaBuf = [gpu_device newBufferWithBytes:texMeta
+                                                             length:RAY_MAXTEX * sizeof(TexMeta) options:opts];
+          id<MTLBuffer> texRawBuf = [gpu_device newBufferWithBytes:raw
+                                                            length:(raw_total > 0 ? raw_total : sizeof(dummy))
+                                                           options:opts];
+
            free(spheres); free(lights); free(emissive); free(mats); free(emissive_cdf);
-          free(all_tris); free(all_bvh);
+           free(all_tris); free(all_bvh);
+           free(raw);
 
           // --- Dispatch ---
          id<MTLCommandBuffer> cb = [gpu_queue commandBuffer];
@@ -621,8 +674,10 @@ Image* render_frame_gpu(const Scene* scene) {
          [enc setBuffer:matBuf offset:0 atIndex:6];
          [enc setBuffer:lightBuf offset:0 atIndex:7];
          [enc setBuffer:emisBuf offset:0 atIndex:8];
-         [enc setBuffer:cdfBuf offset:0 atIndex:9];
-             [enc setTexture:envTex atIndex:0];
+          [enc setBuffer:cdfBuf offset:0 atIndex:9];
+          [enc setBuffer:texMetaBuf offset:0 atIndex:13];
+          [enc setBuffer:texRawBuf offset:0 atIndex:14];
+              [enc setTexture:envTex atIndex:0];
              if (envMipBuf) [enc setBuffer:envMipBuf offset:0 atIndex:12];
               if (texArgBuf) {
                   [enc setBuffer:texArgBuf offset:0 atIndex:10];

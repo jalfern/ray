@@ -314,10 +314,93 @@ static float3 area_light_sample(float3 lp, float size, int sample_idx) {
     return lp + float3(r * cos(angle), 0.0f, r * sin(angle));
 }
 
+/* ── alphaMode MASK ───────────────────────────────────────────────
+ * Per-material lookup tables must be declared before the BVH walks
+ * that read them (in_shadow is the first reader). */
+
+struct TexMeta { int offset; int w; int h; };
+
+struct MeshMat {
+    packed_float3 col;
+    float ref;
+    float ior;
+    float roughness;
+    float metallic;
+    float transmission;
+    int mat_type;
+    int tex_type;
+    float tex_scale;
+    packed_float3 tex_color2;
+    int tex_index;
+    int orm_tex_index;
+    int iri_tex_index;
+    float iri_factor;
+    float iri_ior;
+    float iri_thin_min;
+    float iri_thin_max;
+    float vol_th;
+    float att_r;
+    float att_g;
+    float att_b;
+    float att_dist;
+    int vol_tex_index;
+    int ao_tex_index;
+    int nrm_tex_index;
+    float nrm_scale;
+    int alpha_mode;
+    float alpha_cutoff;
+};
+
+static_assert(sizeof(MeshMat) == 128, "MeshMat size must match gpu_renderer.mm");
+
+/* MASK alpha test, bit-exact mirror of the CPU chain (renderer.cc
+   sample_alpha + the hit_mesh_bvh leaf test, D2/D3): barycentric->UV
+   interpolation, then raw /255 linear bilinear on the tex_raw buffer's
+   raw RGBA8 bytes — NOT texture2d::sample/read (hardware unorm->float +
+   fast-math lerp drift ~1 ULP and can flip the cutoff test, Stage 0
+   spike / tools/spike_alpha_read.mm). The safe-math pragma is
+   per-function and must sit INSIDE the sampler helper (in-kernel-body
+   placement had zero effect — spike v2). tex_meta mirrors the CPU's
+   textures[] sentinel: w == 0 = slot has no image (never masked). */
+static bool mask_cut(device const TriGpu& tri, device const MeshMat& mat,
+                     device const TexMeta* tex_meta, device const uchar* tex_raw,
+                     float u, float v) {
+    #pragma METAL fp math_mode(safe)
+    if (mat.alpha_mode != 1) return false;
+    int ti = mat.tex_index;
+    if (ti < 0 || ti >= MAXTEX) return false;
+    TexMeta tm = tex_meta[ti];
+    if (tm.w <= 0) return false;
+    float mw = 1.0f - u - v;
+    float mu = mw * tri.t0.x + u * tri.t1.x + v * tri.t2.x;
+    float mv = mw * tri.t0.y + u * tri.t1.y + v * tri.t2.y;
+    mu = mu - floor(mu);
+    mv = mv - floor(mv);
+    float fx = mu * tm.w - 0.5f;
+    float fy = mv * tm.h - 0.5f;
+    int ix = int(floor(fx));
+    int iy = int(floor(fy));
+    float rx = fx - float(ix);
+    float ry = fy - float(iy);
+    int x0 = (ix + tm.w * 1024) % tm.w;
+    int y0 = (iy + tm.h * 1024) % tm.h;
+    int x1 = (x0 + 1) % tm.w;
+    int y1 = (y0 + 1) % tm.h;
+    device const uchar* t = tex_raw + tm.offset;
+    float a00 = float(t[(y0 * tm.w + x0) * 4 + 3]) / 255.0f;
+    float a10 = float(t[(y0 * tm.w + x1) * 4 + 3]) / 255.0f;
+    float a01 = float(t[(y1 * tm.w + x0) * 4 + 3]) / 255.0f;
+    float a11 = float(t[(y1 * tm.w + x1) * 4 + 3]) / 255.0f;
+    float a = (1-ry)*((1-rx)*a00 + rx*a10) + ry*((1-rx)*a01 + rx*a11);
+    return a < mat.alpha_cutoff;
+}
+
 static bool in_shadow(float3 p, LightGpu light,
                       device const SphereGpu* spheres, int sc,
                       device const TriGpu* tris, int tc,
                       device const BvhNode* bvh, int nb,
+                      device const MeshMat* mats, int nm,
+                      device const TexMeta* tex_meta, device const uchar* tex_raw,
                       int sample_idx, int origin, int skip_mesh) {
     float3 lp = area_light_sample(light.pos, light.size, sample_idx);
     float3 tl = lp - p;
@@ -347,8 +430,13 @@ static bool in_shadow(float3 p, LightGpu light,
                     if (skip_mesh >= 0 && tris[i].mesh_idx == skip_mesh) continue;
                     float t, u, v;
                     if (hit_tri(ro, rd, tris[i].v0, tris[i].v1, tris[i].v2, t, u, v) &&
-                        t < ld && t > EPS)
+                        t < ld && t > EPS) {
+                        /* MASK cracks pass shadow rays (D3). */
+                        int mi = tris[i].mesh_idx;
+                        if (mi >= 0 && mi < nm && mask_cut(tris[i], mats[mi], tex_meta, tex_raw, u, v))
+                            continue;
                         return true;
+                    }
                 }
             }
         }
@@ -404,7 +492,9 @@ static float3 sample_emissive_mesh_gpu(device const TriGpu* tris, device const f
 static bool emissive_visible_gpu(float3 p, float3 light_pos, float light_dist,
                                   device const SphereGpu* spheres, int sc, int skip_sphere,
                                   device const TriGpu* tris, int tc,
-                                  device const BvhNode* bvh, int nb, int skip_mesh) {
+                                  device const BvhNode* bvh, int nb, int skip_mesh,
+                                  device const MeshMat* mats, int nm,
+                                  device const TexMeta* tex_meta, device const uchar* tex_raw) {
     float3 rd = normalize(light_pos - p);
     float3 ro = p + rd * EPS;
     for (int i = 0; i < sc; i++) {
@@ -430,47 +520,19 @@ static bool emissive_visible_gpu(float3 p, float3 light_pos, float light_dist,
                     if (skip_mesh >= 0 && tris[i].mesh_idx == skip_mesh) continue;
                     float t, u, v;
                     if (hit_tri(ro, rd, tris[i].v0, tris[i].v1, tris[i].v2, t, u, v) &&
-                        t < light_dist - EPS && t > EPS)
+                        t < light_dist - EPS && t > EPS) {
+                        /* MASK cracks pass visibility rays (D3). */
+                        int mi = tris[i].mesh_idx;
+                        if (mi >= 0 && mi < nm && mask_cut(tris[i], mats[mi], tex_meta, tex_raw, u, v))
+                            continue;
                         return true;
+                    }
                 }
             }
         }
     }
     return false;
 }
-
-struct MeshMat {
-    packed_float3 col;
-    float ref;
-    float ior;
-    float roughness;
-    float metallic;
-    float transmission;
-    int mat_type;
-    int tex_type;
-    float tex_scale;
-    packed_float3 tex_color2;
-    int tex_index;
-    int orm_tex_index;
-    int iri_tex_index;
-    float iri_factor;
-    float iri_ior;
-    float iri_thin_min;
-    float iri_thin_max;
-    float vol_th;
-    float att_r;
-    float att_g;
-    float att_b;
-    float att_dist;
-    int vol_tex_index;
-    int ao_tex_index;
-    int nrm_tex_index;
-    float nrm_scale;
-    int alpha_mode;
-    float alpha_cutoff;
-};
-
-static_assert(sizeof(MeshMat) == 128, "MeshMat size must match gpu_renderer.mm");
 
 static float hash3(float x, float y, float z) {
     float n = sin(x * 127.1f + y * 311.7f + z * 74.7f) * 43758.5453f;
@@ -712,6 +774,7 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         constant const float* ibl_sh, int env_mips,
                         device const float* env_mip, int env_w, int env_h,
                         const device TexBundle& scene_tex,
+                        device const TexMeta* tex_meta, device const uchar* tex_raw,
                         int has_floor, int has_bg_color,
                         float bg_r, float bg_g, float bg_b) {
     packed_float3 stk_o[MAX_DEPTH + 2];
@@ -778,6 +841,15 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         for (int i = node.tri_start; i < node.tri_end; i++) {
                             float ti, u, v;
                             if (hit_tri(ro, rd, tris[i].v0, tris[i].v1, tris[i].v2, ti, u, v) && ti < tm) {
+                                /* MASK alpha test (D2/D3): a candidate whose
+                                   interpolated baseColor alpha is below cutoff
+                                   is discarded, so the ray keeps walking and
+                                   may land on a farther triangle (or escape).
+                                   Only MASK materials pay the sample cost. */
+                                int mi2 = tris[i].mesh_idx;
+                                if (mi2 >= 0 && mi2 < nm &&
+                                    mask_cut(tris[i], mats[mi2], tex_meta, tex_raw, u, v))
+                                    continue;
                                 tm = ti; mi = i; mu = u; mv = v;
                             }
                         }
@@ -876,7 +948,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 for (int li = 0; li < nl; li++) {
                     float3 ld = normalize(lights[li].pos - p);
                     int sidx = (sample_idx << 2) | li;
-                    bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb, sidx, -1, -1);
+                    bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
+                                        mats, nm, tex_meta, tex_raw, sidx, -1, -1);
                     float diff = max(0.0f, dot(nf, ld));
                     float lf = sh ? 0.2f : 1.0f;
                     lit += fl * diff * lf;
@@ -905,7 +978,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     int skip_sphere = emissive[ei].type == 0 ? emissive[ei].src_idx : -1;
                     int skip_mesh = emissive[ei].type == 1 ? emissive[ei].src_idx : -1;
                     bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sphere,
-                                                      tris, tc, bvh, nb, skip_mesh);
+                                                      tris, tc, bvh, nb, skip_mesh,
+                                                      mats, nm, tex_meta, tex_raw);
                     if (vis) {
                         lit += fl * emissive[ei].emitted * (G / pdf);
                     }
@@ -1045,9 +1119,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
              for (int li = 0; li < nl; li++) {
                  float3 ld = normalize(lights[li].pos - p);
                  int sidx = (sample_idx << 2) | li;
-                 bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
-                                     sidx, hit_type == 1 ? si : -1,
-                                     shadow_skip_mesh);
+                  bool sh = in_shadow(p, lights[li], spheres, sc, tris, tc, bvh, nb,
+                                      mats, nm, tex_meta, tex_raw,
+                                      sidx, hit_type == 1 ? si : -1,
+                                      shadow_skip_mesh);
 
                 float diff = max(0.0f, dot(n_pert, ld));
                 float3 vw = normalize(ro - p);
@@ -1101,7 +1176,8 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 if (cos_light <= 0) continue;
                 float G = cos_surf * cos_light / fmax(ldist * ldist, 1e-3f);
                 bool vis = !emissive_visible_gpu(p, lp, ldist, spheres, sc, skip_sph,
-                                                  tris, tc, bvh, nb, skip_mesh);
+                                                  tris, tc, bvh, nb, skip_mesh,
+                                                  mats, nm, tex_meta, tex_raw);
                 if (vis) {
                     float3 emd = sc_col * (kd * sao * (1.0f - glass_trans));
                     lit += emd * emissive[ei].emitted * (G / pdf);
@@ -1272,6 +1348,8 @@ kernel void rk(
     texture2d<float> env_tex [[texture(0)]],
     const device TexBundle& scene_tex [[buffer(10)]],
     device const float* env_mip [[buffer(12)]],
+    device const TexMeta* tex_meta [[buffer(13)]],
+    device const uchar* tex_raw [[buffer(14)]],
     uint2 tid [[thread_position_in_grid]],
     uint2 grid [[threads_per_grid]]
 ) {
@@ -1313,7 +1391,7 @@ kernel void rk(
                                 sidx, scene.num_textures,
                                 env_tex, scene.has_env, scene.sh, scene.env_mips,
                                 env_mip, scene.env_w, scene.env_h,
-                                scene_tex,
+                                scene_tex, tex_meta, tex_raw,
                                 scene.has_floor, scene.has_bg_color,
                                 scene.bg_r, scene.bg_g, scene.bg_b);
         }
