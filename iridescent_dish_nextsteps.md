@@ -229,13 +229,19 @@ own tone curve; our scene gives the mirror no bright target. Closing the
 gap is a scene-lighting / looks-dev decision (bright floor material? env
 intensity?), not a shading-term change.
 
-**Known bug (latent): the CPU denoiser filters encoded bytes.**
-`apply_denoise` runs on the post-tone_map+encode 8-bit buffer, so when a
-scene enables `"denoise"` the filter operates on sRGB-encoded values
-rather than linear radiance (edge-stopping statistics see compressed
-darks). Invisible in the parity gate (no gate scene enables denoise;
-`scenes/test_marble_bunny.json` is the only scene JSON that does, and it
-is not gateable). First suspicion if denoised output ever smears darks.
+**The CPU denoiser now filters linear radiance (2026-09-09, was: latent bug).**
+`apply_denoise` used to run on the post-tone_map+encode 8-bit buffer, so when a
+scene enabled `"denoise"` the filter operated on sRGB-encoded values rather
+than linear radiance (edge-stopping statistics saw compressed darks). Fixed:
+the CPU shading loop now writes the per-pixel linear average to a
+`radiance` float buffer on `RenderContext`; `finish_image` denoises that
+buffer (same spatial/normal/depth weights, now linear-space) and then applies
+the identical tone_map + clamp + quantize chain that used to run inline —
+bit-exact, so scenes without `"denoise"` re-encode byte-identically. Verified
+four-row: dish256/envtest/suzanne CPU HEAD-vs-new 0 differing px, and the
+no-arg gate PASSes at the exact recorded baselines. Marble (the only denoise
+scene, not gateable) moved 87.88% max-48 vs HEAD as expected of a filter
+space change; ASan clean on both paths. GPU never had a denoiser — unchanged.
 
 ## Delta analysis (reference vs current render, ranked by visual impact)
 
@@ -307,9 +313,19 @@ is not gateable). First suspicion if denoised output ever smears darks.
    `attenuationColor`/`attenuationDistance` (σ = 0), so thickness
    (factor 0.1 / texture) affects nothing in our tracer *or* in three.js's
    transmission absorption. Documented for completeness; nothing to do.
-10. **Tone/exposure.** Reference is brighter and warmer; after IBL lands,
-    sweep `exposure` (our Reinhard) against the reference's overall
-    luminance.
+10. **Tone/exposure — premise falsified (2026-09-09 sweep).** ~~Reference is
+    brighter and warmer; after IBL lands, sweep `exposure` (our Reinhard)
+    against the reference's overall luminance.~~ Measured (display-referred
+    region means, reference framing matches the decomposed camera): reference
+    subject (99,103,95) / plate (91,101,95) vs ours at exp 1.0 subject
+    (98,87,59) / plate (135,113,81). We are at or ABOVE reference luminance
+    on the subject — the frame-mean gap (81 vs 32) is the black background
+    vs the reference's bright wood table, not subject darkness. The sweep
+    ladder (1.3/1.6/2.0/2.5/3.0, dish256 CPU) moved every region AWAY from
+    the reference. Residual gap = hue/saturation (gold mirror tinted by the
+    env it mirrors + env tint) and background/floor composition — the
+    plate-looks diagnostic's scene-lighting call, not a tone-curve or
+    exposure call.
 11. **Cover pose.** t=0 pose matches the reference; the animation tilts the
     cover ~12° by t≈3.3 s. No action unless a mid-animation frame is wanted.
 12. **CPU performance.** See current state; parity at full res is
@@ -468,8 +484,16 @@ severe=0 -> ok), envtest unchanged at baseline. No-arg gate PASS.
 
 ### Phase 6 — Polish
 
-6.1 Exposure sweep vs reference luminance (per-region mean histogram
-comparison).
+6.1 **DONE (2026-09-09): exposure sweep.** CPU region-mean sweep, both
+scenes (dish256 exp 1.0–3.0, marble exp 0.7–1.2; scripts in /tmp, throwaway).
+Outcome: NO scene changed. Dish stays at default exp 1.0 — the "reference is
+brighter" premise is falsified (see delta 10); the knob that remains for the
+dish is scene composition (a bright floor/backdrop the gold mirror can
+reflect — the plate-looks diagnostic's open call), not exposure. Marble
+stays at exp 1.2 — the bunny's mean sits at 145–164 across the whole ladder
+(white-glass body near the Reinhard shoulder throughout), so exposure cannot
+restore its shading; the pre-sRGB "flat bunny" memory was whole-image
+darkness, already superseded.
 6.2 Update README feature table (normal maps, MASK, standalone AO,
 iridescenceTexture, IBL) and rebaseline the lamp/dragon parity numbers.
 6.3 Optional: cover mid-animation frame (a one-line keyframe lerp in the
