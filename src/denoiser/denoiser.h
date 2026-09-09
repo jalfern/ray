@@ -15,7 +15,9 @@ typedef struct {
 } GBuffer;
 
 GBuffer* trace_gbuffer(const Scene* scene);
-void denoise(Image* img, const GBuffer* gbuf, int width, int height, float strength);
+/* Edge-stopping filter in LINEAR radiance space: radiance is w*h*3 floats
+   (pre tone_map/encode), filtered in place. */
+void denoise(float* radiance, const GBuffer* gbuf, int width, int height, float strength);
 void free_gbuffer(GBuffer* gbuf);
 
 #endif

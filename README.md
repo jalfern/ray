@@ -64,7 +64,7 @@ The glTF test scenes (lamp, dragon, dish, suzanne, …) live in
 | Emissive sphere + mesh lights | Done |
 | Depth of field | Done |
 | HDR environment maps | Done |
-| Denoiser | Done |
+| Denoiser (linear-space edge-stopping filter, CPU-only post-pass) | Done |
 | Animation (orbit camera) | Done |
 | **glTF 2.0 importer** (core spec) | Done |
 | KHR_materials_transmission (glass) | Done |

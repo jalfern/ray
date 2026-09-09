@@ -1147,6 +1147,7 @@ typedef struct {
     int width, height;
     EnvMap* env;
     Image* img;
+    float* radiance;   /* linear radiance, w*h*3: denoise input, pre tone_map */
     ImageTexture* textures;
     int num_textures;
     SceneOpts opts;
@@ -1196,12 +1197,14 @@ static void render_rows(RenderContext* ctx, int y_start, int y_end) {
                  color_avg.x < -1e-6f || color_avg.y < -1e-6f || color_avg.z < -1e-6f))
                 fprintf(stderr, "[rawdbg] (%d,%d) = (%.9g, %.9g, %.9g)\n",
                         x, y, (double)color_avg.x, (double)color_avg.y, (double)color_avg.z);
-            color_avg = tone_map(color_avg, ctx->exposure);
 
+            /* Linear radiance, pre tone_map: finish_image() denoises this
+               buffer (when "denoise" is on) and then applies the exact
+               tone_map + encode chain that used to run here per pixel. */
             size_t idx = (y * ctx->width + x) * 3;
-            ctx->img->data[idx]   = (uint8_t)(fmaxf(0.0f, fminf(color_avg.x, 1.0f)) * 255.0f);
-            ctx->img->data[idx+1] = (uint8_t)(fmaxf(0.0f, fminf(color_avg.y, 1.0f)) * 255.0f);
-            ctx->img->data[idx+2] = (uint8_t)(fmaxf(0.0f, fminf(color_avg.z, 1.0f)) * 255.0f);
+            ctx->radiance[idx]   = color_avg.x;
+            ctx->radiance[idx+1] = color_avg.y;
+            ctx->radiance[idx+2] = color_avg.z;
         }
     }
 }
@@ -1392,6 +1395,7 @@ static RenderContext setup_context(const Scene* scene) {
     ctx.opts.has_bg_color = scene->has_bg_color;
     ctx.opts.bg_color = (V){scene->bg_color[0], scene->bg_color[1], scene->bg_color[2]};
     ctx.img = create_image(scene->width, scene->height);
+    ctx.radiance = (float*)calloc((size_t)scene->width * scene->height * 3, sizeof(float));
     return ctx;
 }
 
@@ -1408,13 +1412,29 @@ static void free_render_buffers(RenderContext* ctx) {
     }
     free(ctx->spheres);
     free(ctx->lights);
+    free(ctx->radiance);
 }
 
-static void apply_denoise(Image* img, const Scene* scene) {
-    if (!scene->denoise) return;
-    GBuffer* gbuf = trace_gbuffer(scene);
-    denoise(img, gbuf, scene->width, scene->height, scene->denoise_strength);
-    free_gbuffer(gbuf);
+/* Post-pass over the linear radiance buffer: optional denoise (in linear
+   space, before Reinhard compresses fireflies), then the display-referred
+   encode. The tone_map/clamp/quantize arithmetic is identical to the old
+   per-pixel version inside render_rows, so scenes without "denoise"
+   re-encode bit-exactly. */
+static void finish_image(RenderContext* ctx, const Scene* scene) {
+    if (scene->denoise) {
+        GBuffer* gbuf = trace_gbuffer(scene);
+        denoise(ctx->radiance, gbuf, scene->width, scene->height, scene->denoise_strength);
+        free_gbuffer(gbuf);
+    }
+    size_t npix = (size_t)scene->width * scene->height;
+    for (size_t i = 0; i < npix; i++) {
+        size_t off = i * 3;
+        V c = {ctx->radiance[off], ctx->radiance[off+1], ctx->radiance[off+2]};
+        c = tone_map(c, ctx->exposure);
+        ctx->img->data[off]   = (uint8_t)(fmaxf(0.0f, fminf(c.x, 1.0f)) * 255.0f);
+        ctx->img->data[off+1] = (uint8_t)(fmaxf(0.0f, fminf(c.y, 1.0f)) * 255.0f);
+        ctx->img->data[off+2] = (uint8_t)(fmaxf(0.0f, fminf(c.z, 1.0f)) * 255.0f);
+    }
 }
 
 Image* render_frame(const Scene* scene) {
@@ -1435,7 +1455,7 @@ Image* render_frame(const Scene* scene) {
         fprintf(stderr, "  mesh[%d] tests=%d hits=%d\n", i, g_hit_tri_tests[i], g_hit_tri_hits[i]);
     }
     g_debug_frame_done = 1;
-    apply_denoise(ctx.img, scene);
+    finish_image(&ctx, scene);
     envmap_free(ctx.env);
     free_render_buffers(&ctx);
     return ctx.img;
@@ -1470,7 +1490,7 @@ Image* render_frame_parallel(const Scene* scene, int num_threads) {
         fprintf(stderr, "  mesh[%d] tests=%d hits=%d\n", i, g_hit_tri_tests[i], g_hit_tri_hits[i]);
     }
     g_debug_frame_done = 1;
-    apply_denoise(ctx.img, scene);
+    finish_image(&ctx, scene);
     envmap_free(ctx.env);
     free_render_buffers(&ctx);
     return ctx.img;

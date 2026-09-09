@@ -165,8 +165,8 @@ GBuffer* trace_gbuffer(const Scene* scene) {
     return gbuf;
 }
 
-void denoise(Image* img, const GBuffer* gbuf, int width, int height, float strength) {
-    if (!img || !gbuf || strength <= 0) return;
+void denoise(float* radiance, const GBuffer* gbuf, int width, int height, float strength) {
+    if (!radiance || !gbuf || strength <= 0) return;
 
     int radius = 4;
     float sigma_s = 3.0f;
@@ -207,9 +207,9 @@ void denoise(Image* img, const GBuffer* gbuf, int width, int height, float stren
                     float w = ws * wn * wd;
 
                     size_t p_off = (yy * width + xx) * 3;
-                    float pr = img->data[p_off] / 255.0f;
-                    float pg = img->data[p_off+1] / 255.0f;
-                    float pb = img->data[p_off+2] / 255.0f;
+                    float pr = radiance[p_off];
+                    float pg = radiance[p_off+1];
+                    float pb = radiance[p_off+2];
 
                     sum_r += pr * w;
                     sum_g += pg * w;
@@ -224,19 +224,16 @@ void denoise(Image* img, const GBuffer* gbuf, int width, int height, float stren
                 out[ci*3+2] = sum_b / sum_w;
             } else {
                 size_t off = ci * 3;
-                out[off]   = img->data[off] / 255.0f;
-                out[off+1] = img->data[off+1] / 255.0f;
-                out[off+2] = img->data[off+2] / 255.0f;
+                out[off]   = radiance[off];
+                out[off+1] = radiance[off+1];
+                out[off+2] = radiance[off+2];
             }
         }
     }
 
-    for (int i = 0; i < width * height; i++) {
-        size_t off = i * 3;
-        img->data[off]   = (uint8_t)(fminf(fmaxf(out[off],   0.0f), 1.0f) * 255.0f);
-        img->data[off+1] = (uint8_t)(fminf(fmaxf(out[off+1], 0.0f), 1.0f) * 255.0f);
-        img->data[off+2] = (uint8_t)(fminf(fmaxf(out[off+2], 0.0f), 1.0f) * 255.0f);
-    }
+    /* No clamp: linear HDR radiance, channels may exceed 1 legitimately;
+       the encode (Reinhard + sRGB) clamps downstream. */
+    memcpy(radiance, out, (size_t)width * height * 3 * sizeof(float));
 
     free(out);
 }
