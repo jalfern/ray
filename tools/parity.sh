@@ -31,7 +31,9 @@
 # pass, so the gate refuses to report it: the diff is skipped and it exits
 # non-zero.
 #
-# Defaults to the phase-2 parity set (iri dish 256 + envtest). Per-run PPMs and
+# Defaults to the parity set (iri dish 256 + envtest + suzanne). suzanne
+# carries no HDR env, so it is the only gate coverage for the procedural-env
+# path (that hole is how the clamp bug hid). Per-run PPMs and
 # stderr logs land in a fresh /tmp/parity.XXXXXX dir, printed at the top.
 #
 # macOS /bin/bash 3.2 compatible.
@@ -69,7 +71,8 @@ if [ ${#SCENES[@]} -eq 0 ]; then
         exit 2
     fi
     SCENES=(test_scenes/scene_iri_dish_parity256.json
-            test_scenes/scene_envtest_stdout.json)
+            test_scenes/scene_envtest_stdout.json
+            test_scenes/scene_suzanne_stdout.json)
 fi
 echo "parity gate: artifacts in $OUTDIR"
 

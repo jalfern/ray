@@ -38,7 +38,7 @@
 # p99_9=20 n_severe=4, lamp p99_9=19 n_severe=0, both within the floors (48/16),
 # so both are ok.
 ok	test_scenes/scene_iri_dish_parity256.json	311	468	10	10	0
-ok	test_scenes/scene_suzanne_stdout.json	132	162	3	3	0
+ok	test_scenes/scene_suzanne_stdout.json	334	426	4	4	0
 ok	test_scenes/scene_dragon_stdout.json	23353	54186	205	20	4
 ok	test_scenes/scene_lamp_stdout.json	8627	10698	64	19	0
 ok	test_scenes/scene_envtest_stdout.json	704	1041	5	5	0

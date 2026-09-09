@@ -22,7 +22,7 @@ gate (see "Render parity" below).
 
 ## Testing and parity
 
-- `tools/parity.sh [SCENE ...]` is the CPU/GPU gate; it does not build — run `make` first. With no args it gates the default set (iri dish 256 + envtest). The no-arg gate PASSES at HEAD. (envtest was the last `known-bug` — a GPU env-sampling divergence, max_channel_err=255 — fixed 2026-09-04 by reading the CPU mip chain from a buffer in the prefiltered path; re-baselined to `ok`, max 3. See `iridescent_dish_nextsteps.md`.)
+- `tools/parity.sh [SCENE ...]` is the CPU/GPU gate; it does not build — run `make` first. With no args it gates the default set (iri dish 256 + envtest + suzanne — suzanne carries no HDR env, so it is the only gate coverage for the procedural-env path). The no-arg gate PASSES at HEAD. (envtest was the last `known-bug` — a GPU env-sampling divergence, max_channel_err=255 — fixed 2026-09-04 by reading the CPU mip chain from a buffer in the prefiltered path; re-baselined to `ok`, max 3. suzanne's floor moved 132→334 px (max 4) with the 2026-09-08 sRGB encode — attributed to a pre-sRGB rebuild and re-baselined, same amplification story as envtest/dish.)
 - `make volcheck` runs the KHR_materials_volume math parity check — needs `node` (`tools/vol_ref_check.mjs`).
 - Thin-film math parity (the iridescence twin of `volcheck`): `tools/iri_check.c` (float32, includes `thin_film.h`) vs `tools/iri_ref_check.mjs` (float64 port of the three.js GLSL). No make target — `g++ -O2 -I./include -std=c++11 tools/iri_check.c -o /tmp/iri_check -lm`, run both, max abs diff ≤ 1e-3 (currently 1.5e-6). The `.mjs` reads GLSL from `web_viewer/node_modules/three` (gitignored — `npm install` in `web_viewer/` first on a fresh clone).
 - `test_scenes/lamp_glass_mask.ppm` is committed (`*.ppm` is gitignored; it was force-added). Use the committed file, do not regenerate it.
@@ -96,11 +96,11 @@ Gate semantics (`tools/parity.sh`):
 - **No baseline.** A scene with no line in the file FAILs; certify it with
   `tools/parity.sh --rebaseline SCENE`.
 
-## Open items (2026-09-07)
+## Open items (2026-09-08)
 
-- The no-arg gate (iri dish + envtest) uses valid envs only, so the procedural-env
-  path has zero gate coverage. That is why the clamp bug went unnoticed. Add a
-  procedural-env scene to the default gate.
+- None open. The procedural-env gate hole is closed: `scene_suzanne_stdout.json`
+  (no HDR env) joined the default gate set, so the clamp-bug hole that let
+  `env_procedural` drift unnoticed is now gated.
 
 Resolved since 2026-09-05: the glass divergence and the `env_procedural` clamp fix
 are history (see `glass_parity_nextsteps.md`). The 404 `polyhaven_haven_01_1k.hdr`
