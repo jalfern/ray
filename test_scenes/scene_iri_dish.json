@@ -19,8 +19,28 @@
     "file": "envmaps/polyhaven_studio_small_03_1k.hdr",
     "intensity": 1.0
   },
-  "background": [0.0, 0.0, 0.0],
+  "background": [
+    0.0,
+    0.0,
+    0.0
+  ],
   "output": "images/iri_dish.png",
   "width": 1024,
-  "height": 934
+  "height": 934,
+  "spheres": [
+    {
+      "pos": [
+        0.0,
+        -2.0,
+        0.0
+      ],
+      "radius": 2.0,
+      "color": [
+        0.6,
+        0.6,
+        0.6
+      ],
+      "material": "plastic"
+    }
+  ]
 }

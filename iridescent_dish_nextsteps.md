@@ -266,12 +266,21 @@ space change; ASan clean on both paths. GPU never had a denoiser — unchanged.
    black `"background"`; all implicit-floor scenes carry the explicit key
    and are byte-identical to the pre-change binary.
 3. **The gold plate is invisible** (it is the reference's main subject).
-   Ours reads as a dark teal/maroon ring. Causes, in order: (a) the dish
+   Ours reads as a dark teal/maroon ring. ~~Causes, in order: (a) the dish
    glass above it is too dark (item 4), (b) no IBL to carry the gold's
-   diffuse + specular (item 1), (c) `goldleaf_nrm` (2048², strong weathering)
-   is ignored (item 5). Note the ORM says metallic ≈ 0.098 (G channel = 25)
-   — the gold look in the reference is *basecolor diffuse + IBL*, not
-   metalness, which makes item 1 decisive.
+   diffuse + specular (item 1), (c) `goldleaf_nrm` is ignored (item 5).
+   Note the ORM says metallic ≈ 0.098 (G channel = 25) — the gold look in
+   the reference is *basecolor diffuse + IBL*, not metalness.~~ **Corrected
+   2026-09-10 against the raw assets** (this entry contradicted the
+   plate-looks diagnostic; the diagnostic was right): `goldleaf_orm` is
+   (224,25,252) = AO 0.88 / roughness 0.098 / **metallic 0.99** — G is
+   roughness, B is metallic, read that way by both backends (spec-correct;
+   the "G = metallic" wording here was the misread). The plate is a
+   near-perfect gold-tinted MIRROR (F0 = basecolor, verified gold
+   (245,189,92)); a mirror is only as bright as what it mirrors, and ours
+   mirrored a black void. IBL (item 1) and the normal map (item 5) have
+   since landed; the remaining knob is scene lighting — a bright backdrop/
+   env for the mirror to see (plate-looks diagnostic; Phase 6.1 sweep).
  4. **Dish glass too dark/green.** Reference: near-neutral glass with a
     rainbow band on the rim. Ours: uniform dark-green cast. Root cause: the
     ~~**iridescence color lobe is not parsed** — `iridescenceTexture` (RGB)
@@ -484,16 +493,23 @@ severe=0 -> ok), envtest unchanged at baseline. No-arg gate PASS.
 
 ### Phase 6 — Polish
 
-6.1 **DONE (2026-09-09): exposure sweep.** CPU region-mean sweep, both
-scenes (dish256 exp 1.0–3.0, marble exp 0.7–1.2; scripts in /tmp, throwaway).
-Outcome: NO scene changed. Dish stays at default exp 1.0 — the "reference is
-brighter" premise is falsified (see delta 10); the knob that remains for the
-dish is scene composition (a bright floor/backdrop the gold mirror can
-reflect — the plate-looks diagnostic's open call), not exposure. Marble
-stays at exp 1.2 — the bunny's mean sits at 145–164 across the whole ladder
-(white-glass body near the Reinhard shoulder throughout), so exposure cannot
-restore its shading; the pre-sRGB "flat bunny" memory was whole-image
-darkness, already superseded.
+6.1 **DONE (2026-09-09/10): exposure + backdrop sweep.** CPU region-mean
+sweep, both scenes (dish256 exp 1.0–3.0, marble exp 0.7–1.2; scripts in
+/tmp, throwaway). Marble stays at exp 1.2 — the bunny's mean sits at
+145–164 across the whole ladder (white-glass body near the Reinhard
+shoulder throughout), so exposure cannot restore its shading; the pre-sRGB
+"flat bunny" memory was whole-image darkness, already superseded.
+Dish: exposure and env-intensity sweeps (intensity 1/2/4/7 × backdrop
+on/off, GPU) showed the subject region was ALREADY at reference
+brightness (see delta 10 + 3) — I≥2 washed it out. ADOPTED 2026-09-10:
+backdrop table — one big flattened plastic sphere, r 2.0 at (0,−2,0),
+color (0.6,0.6,0.6), roughness 1.0 — added to the four dish scenes
+(pretty/stdout/small_stdout/parity256); env intensity stays 1.0, exposure
+default. This is the plate-looks diagnostic's scene-composition fix: the
+gold mirror now reflects a bright target (frame mean 32→70 vs ref 81;
+subject mean 98→112 vs ref 99). parity256 re-baselined to
+291/474/15/15/0 (certifiable: p99_9 15, severe 0) — mirror rays now have a
+geometry target, same glass-traversal jitter class, no new divergence.
 6.2 Update README feature table (normal maps, MASK, standalone AO,
 iridescenceTexture, IBL) and rebaseline the lamp/dragon parity numbers.
 6.3 Optional: cover mid-animation frame (a one-line keyframe lerp in the
