@@ -849,6 +849,70 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
+    /* KHR_materials_anisotropy (three.js r169 port — same family as the KHR
+       spec pseudo-code; mirrored op-for-op into shaders.metal).  Build the
+       anisotropic tangent/bitangent pair per hit: strength = factor ×
+       anisotropyTexture.B, direction = normalize(2·tex.rg−1) rotated by
+       anisotropyRotation (no texture → the rotation vector is the
+       direction).  Two consumers: the per-light specular evaluates the
+       anisotropic GGX (F·V·D) instead of Blinn-Phong when aniso > 0, and
+       the mirror ray reflects about a bent normal (Filament's single-sample
+       PMREM approximation — the traced mirror is the sampled lobe).
+       Everything is gated on aniso_factor > 0 — scenes without an
+       anisotropic material stay byte-identical. */
+    float aniso = 0.0f;
+    V anisoT = {0, 0, 0}, anisoB = {0, 0, 0};
+    if (hit_type == 2 && meshes[mi].aniso_factor > 0.0f) {
+        V T = (V){m_tan[0], m_tan[1], m_tan[2]};
+        if (sqrtf(dot(T, T)) > EPS) {
+            float sw = (m_tan[3] >= 0.0f) ? 1.0f : -1.0f;
+            V Tp = norm(sub(T, mul(n, dot(T, n))));   /* Gram-Schmidt on flipped normal */
+            V Bp = norm(mul(cross(n, Tp), sw));       /* bitangent handedness */
+            float cr = cosf(meshes[mi].aniso_rotation);
+            float sr = sinf(meshes[mi].aniso_rotation);
+            float dx = cr, dy = sr;
+            aniso = meshes[mi].aniso_factor;
+            if (meshes[mi].aniso_tex_index >= 0 &&
+                meshes[mi].aniso_tex_index < num_textures && textures) {
+                V c = sample_linear3(&textures[meshes[mi].aniso_tex_index],
+                                     m_uv[0], m_uv[1]);
+                float px = 2.0f * c.x - 1.0f, py = 2.0f * c.y - 1.0f;
+                float pl2 = px * px + py * py;
+                if (pl2 > 1e-12f) {
+                    float pl = sqrtf(pl2);
+                    px /= pl; py /= pl;
+                } else { px = 1.0f; py = 0.0f; }
+                dx = cr * px - sr * py;   /* rot * normalize(2*P.rg - 1) */
+                dy = sr * px + cr * py;
+                aniso *= c.z;             /* strength × texture.B */
+            }
+            if (aniso > 1.0f) aniso = 1.0f;
+            anisoT = norm(add(mul(Tp, dx), mul(Bp, dy)));
+            anisoB = sub(mul(Bp, dx), mul(Tp, dy));
+        }
+    }
+
+    /* KHR_materials_clearcoat — direct lobe (three.js BRDF_GGX_Clearcoat +
+       meshphysical composite; mirrored op-for-op into shaders.metal).  A
+       smooth isotropic dielectric coat over the base layer: a second GGX lobe
+       (f0=0.04, f90=1, alpha=ccRough^2) evaluated against the NON-perturbed
+       geometric normal `n` (three.js clearcoatNormal default = the
+       nonPerturbedNormal; the base normal map is NOT applied to the coat
+       until the Stage-3 clearcoatNormal port).  Base outgoing is dimmed by
+       (1 - cc*Fcc) and the coat lobe added on top (composite at the return).
+       Gated on cc_factor > 0 so non-coat scenes stay byte-identical. */
+    float cc = 0.0f, ccRough = 0.0f, ccFcc = 0.0f;
+    V ccDirect = {0, 0, 0};
+    if (hit_type == 2 && meshes[mi].cc_factor > 0.0f) {
+        cc = fminf(1.0f, meshes[mi].cc_factor);
+        ccRough = fminf(1.0f, fmaxf(0.0f, meshes[mi].cc_roughness));
+        V eyeDir = norm(sub(o, p));
+        float cvc = fmaxf(0.0f, dot(n, eyeDir));
+        if (cvc > 1.0f) cvc = 1.0f;
+        float fresc = exp2f((-5.55473f * cvc - 6.98316f) * cvc);
+        ccFcc = 0.04f * (1.0f - fresc) + 1.0f * fresc;   /* F_Schlick(0.04,1) */
+    }
+
     if (mat == MAT_EMISSIVE) return (V){sc.x * Tseg.x, sc.y * Tseg.y, sc.z * Tseg.z};
 
     /* Merged plastic+metallic PBR params (per pixel):
@@ -942,9 +1006,55 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             V glw = mul(sc, spec_str);
             if (film_w > 0.0f) glw = add(mul(glw, 1.0f - film_w), mul(film, film_w));
             lit = add(lit, add(mul(sc, diff * lf * sphere_ao * (1.0f - glass_trans)), mul(glw, spec * lf)));
+        } else if (aniso > 0.0f) {
+            /* Anisotropic specular (three.js BRDF_GGX under USE_ANISOTROPY /
+               KHR pseudo-code): F·V·D replaces the Blinn-Phong lobe.
+               alphaT = mix(rough², 1, aniso²) stretches the lobe along the
+               anisotropy tangent; alphaB = rough² stays isotropic. */
+            float dotNV = fmaxf(0.0f, dot(n_pert, view));
+            float dotNH = fmaxf(0.0f, dot(n_pert, half));
+            float dotVH = fmaxf(0.0f, dot(view, half));
+            float aB = sphere_rough * sphere_rough;
+            float aT = aB + (1.0f - aB) * (aniso * aniso);
+            float tV = dot(anisoT, view), bV = dot(anisoB, view);
+            float tL = dot(anisoT, light_dir), bL = dot(anisoB, light_dir);
+            float tH = dot(anisoT, half), bH = dot(anisoB, half);
+            float gv = diff * sqrtf(aT*aT*tV*tV + aB*aB*bV*bV + dotNV*dotNV);
+            float gl = dotNV * sqrtf(aT*aT*tL*tL + aB*aB*bL*bL + diff*diff);
+            float Vs = fminf(1.0f, 0.5f / fmaxf(gv + gl, 1e-8f));
+            float a2 = aT * aB;
+            float vx = aB * tH, vy = aT * bH, vz = a2 * dotNH;
+            float v2 = vx*vx + vy*vy + vz*vz;
+            float w2 = v2 > 0.0f ? a2 / v2 : 0.0f;
+            float Ds = 0.31830988618379067154f * a2 * w2 * w2;   /* RECIPROCAL_PI */
+            float fres = exp2f((-5.55473f * dotVH - 6.98316f) * dotVH);
+            V F = add(mul(f0mix, 1.0f - fres), mul((V){1.0f, 1.0f, 1.0f}, fres));
+            V specV = mul(F, Vs * Ds);
+            lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(specV, diff * lf)));
         } else {
             /* Merged plastic+metallic PBR: diffuse * (1-metallic) * AO, specular F0. */
             lit = add(lit, add(mul(mul(sc, kd), diff * lf * sphere_ao), mul(f0mix, spec * spec_str * lf)));
+        }
+        if (cc > 0.0f) {
+            /* Clearcoat direct lobe (three.js BRDF_GGX_Clearcoat): D_GGX *
+               V_GGX_SmithCorrelated * F_Schlick on the geometric normal `n`,
+               alpha = ccRough^2.  Accumulated separately (added at the return,
+               scaled by cc; not folded into `lit`, which is dimmed by (1-cc*Fcc)). */
+            float dotNLcc = fmaxf(0.0f, dot(n, light_dir));
+            float dotNVcc = fmaxf(0.0f, dot(n, view));
+            float dotNHcc = fmaxf(0.0f, dot(n, half));
+            float dotVHcc = fmaxf(0.0f, dot(view, half));
+            float alpha = ccRough * ccRough;
+            float a2c = alpha * alpha;
+            float dc = dotNHcc * dotNHcc * (a2c - 1.0f) + 1.0f;
+            float Dcc = 0.31830988618379067154f * a2c / (dc * dc);   /* RECIPROCAL_PI */
+            float gvc = dotNLcc * sqrtf(a2c + (1.0f - a2c) * dotNVcc * dotNVcc);
+            float glc = dotNVcc * sqrtf(a2c + (1.0f - a2c) * dotNLcc * dotNLcc);
+            float Vcc = 0.5f / fmaxf(gvc + glc, 1e-8f);
+            float frc = exp2f((-5.55473f * dotVHcc - 6.98316f) * dotVHcc);
+            float Fc = 0.04f * (1.0f - frc) + 1.0f * frc;
+            float ccw = Fc * Vcc * Dcc * dotNLcc * lf;
+            ccDirect = add(ccDirect, (V){ccw, ccw, ccw});
         }
     }
 
@@ -1017,6 +1127,22 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     cos_i = entering ? -cos_i : cos_i;
 
     V refl_dir = sub(d, mul(n_adj, 2.0f * dot(d, n_adj)));
+    if (aniso > 0.0f) {
+        /* Anisotropic mirror (three.js getIBLAnisotropyRadiance): the
+           mirror ray reflects about a bent normal stretched along the
+           bitangent (Filament's single-sample PMREM approximation).
+           spec_rough is unchanged, so escaped mirror rays keep sampling
+           the prefiltered env at the surface roughness. */
+        V view = mul(d, -1.0f);
+        V b1 = cross(anisoB, view);
+        V bent = cross(b1, anisoB);
+        if (dot(bent, bent) > 1e-12f) bent = norm(bent);
+        else bent = n;
+        float ma = 1.0f - aniso * (1.0f - sphere_rough);
+        ma = ma * ma; ma = ma * ma;
+        bent = norm(add(mul(bent, 1.0f - ma), mul(n, ma)));
+        refl_dir = sub(d, mul(bent, 2.0f * dot(d, bent)));
+    }
     V refl_origin = add(p, mul(refl_dir, EPS));
     V refl_col = trace_ray(refl_origin, refl_dir, depth + 1,
                            spheres, num_spheres, meshes, num_meshes,
@@ -1028,7 +1154,15 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
     if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
         /* Unified PBR mirror: reflection weighted per-channel by F0
            (the old basecolor-tinted metal mirror at metallic=1). */
-        return add(base_color, (V){refl_col.x * f0mix.x, refl_col.y * f0mix.y, refl_col.z * f0mix.z});
+        V outgoing = add(base_color, (V){refl_col.x * f0mix.x, refl_col.y * f0mix.y, refl_col.z * f0mix.z});
+        if (cc > 0.0f) {
+            /* three.js meshphysical: outgoing*(1 - cc*Fcc) + cc*clearcoatSpecular.
+               ccDirect carries its own in-medium Tseg (base/refl already did). */
+            float scale = 1.0f - cc * ccFcc;
+            V ccAdd = {cc * ccDirect.x * Tseg.x, cc * ccDirect.y * Tseg.y, cc * ccDirect.z * Tseg.z};
+            outgoing = add(mul(outgoing, scale), ccAdd);
+        }
+        return outgoing;
     }
 
     float reflectivity = sphere_ref;
@@ -1264,6 +1398,12 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].nrm_scale = scene->meshes[i].nrm_scale;
             meshes[i].alpha_mode = scene->meshes[i].alpha_mode;
             meshes[i].alpha_cutoff = scene->meshes[i].alpha_cutoff;
+            meshes[i].aniso_factor = scene->meshes[i].aniso_factor;
+            meshes[i].aniso_rotation = scene->meshes[i].aniso_rotation;
+            meshes[i].aniso_tex_index = scene->meshes[i].aniso_tex_index;
+            meshes[i].cc_factor = scene->meshes[i].cc_factor;
+            meshes[i].cc_roughness = scene->meshes[i].cc_roughness;
+            meshes[i].cc_nrm_tex_index = scene->meshes[i].cc_nrm_tex_index;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;

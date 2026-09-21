@@ -871,6 +871,13 @@ typedef struct {
     float metallic;
     float roughness;
     float emissive[3];
+    float emissive_strength; /* KHR_materials_emissive_strength, default 1 */
+    float aniso_strength;    /* KHR_materials_anisotropy strength, default 0 */
+    float aniso_rotation;    /* anisotropyRotation, radians, default 0 */
+    int aniso_tex;           /* anisotropyTexture index, -1 = none */
+    float cc_factor;         /* KHR_materials_clearcoat clearcoatFactor, default 0 */
+    float cc_roughness;      /* clearcoatRoughnessFactor, default 0 */
+    int cc_nrm_tex;          /* clearcoatNormalTexture index, -1 = none */
     float transmission;    /* 0-1, default 0 */
     float ior;             /* 1.0-3.0, default 1.5 */
     float iri_factor;      /* iridescenceFactor 0-1, default 0 */
@@ -1170,6 +1177,9 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].metallic = 1.0f;
         mats[n].roughness = 1.0f;
         mats[n].ior = 1.5f;
+        mats[n].emissive_strength = 1.0f;
+        mats[n].aniso_tex = -1;
+        mats[n].cc_nrm_tex = -1;
         mats[n].iri_ior = 1.3f;
         mats[n].iri_thin_min = 100.0f;
         mats[n].iri_thin_max = 400.0f;
@@ -1389,6 +1399,117 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                         }
                         if (*ix == '}') ix++;
                         ex = ix;
+                    } else if (strcmp(ek, "KHR_materials_emissive_strength") == 0) {
+                        const char* sx = ex;
+                        skip_ws_ptr(&sx);
+                        if (*sx == '{') sx++;
+                        while (*sx && *sx != '}') {
+                            char sk[64];
+                            const char* ssave = sx;
+                            if (!parse_json_string(&sx, sk, sizeof(sk))) { sx = ssave; skip_value(&sx); continue; }
+                            skip_ws_ptr(&sx);
+                            if (*sx == ':') sx++;
+                            skip_ws_ptr(&sx);
+                            if (strcmp(sk, "emissiveStrength") == 0) {
+                                float fv; if (parse_json_number(&sx, &fv)) mats[n].emissive_strength = fv;
+                            } else {
+                                skip_value(&sx);
+                            }
+                            skip_ws_ptr(&sx);
+                            if (*sx == ',') sx++;
+                        }
+                        if (*sx == '}') sx++;
+                        ex = sx;
+                    } else if (strcmp(ek, "KHR_materials_anisotropy") == 0) {
+                        const char* nx = ex;
+                        skip_ws_ptr(&nx);
+                        if (*nx == '{') nx++;
+                        while (*nx && *nx != '}') {
+                            char nk[64];
+                            const char* nsave = nx;
+                            if (!parse_json_string(&nx, nk, sizeof(nk))) { nx = nsave; skip_value(&nx); continue; }
+                            skip_ws_ptr(&nx);
+                            if (*nx == ':') nx++;
+                            skip_ws_ptr(&nx);
+                            if (strcmp(nk, "anisotropyStrength") == 0) {
+                                float fv; if (parse_json_number(&nx, &fv)) mats[n].aniso_strength = fv;
+                            } else if (strcmp(nk, "anisotropyRotation") == 0) {
+                                float fv; if (parse_json_number(&nx, &fv)) mats[n].aniso_rotation = fv;
+                            } else if (strcmp(nk, "anisotropyTexture") == 0) {
+                                const char* tx = nx;
+                                skip_ws_ptr(&tx);
+                                if (*tx == '{') tx++;
+                                while (*tx && *tx != '}') {
+                                    char tk[64];
+                                    const char* tsave = tx;
+                                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ':') tx++;
+                                    skip_ws_ptr(&tx);
+                                    float fv;
+                                    if (strcmp(tk, "index") == 0) {
+                                        if (parse_json_number(&tx, &fv)) mats[n].aniso_tex = (int)fv;
+                                    } else {
+                                        skip_value(&tx);
+                                    }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ',') tx++;
+                                }
+                                if (*tx == '}') tx++;
+                                nx = tx;
+                            } else {
+                                skip_value(&nx);
+                            }
+                            skip_ws_ptr(&nx);
+                            if (*nx == ',') nx++;
+                        }
+                        if (*nx == '}') nx++;
+                        ex = nx;
+                    } else if (strcmp(ek, "KHR_materials_clearcoat") == 0) {
+                        const char* cx = ex;
+                        skip_ws_ptr(&cx);
+                        if (*cx == '{') cx++;
+                        while (*cx && *cx != '}') {
+                            char ck[64];
+                            const char* csave = cx;
+                            if (!parse_json_string(&cx, ck, sizeof(ck))) { cx = csave; skip_value(&cx); continue; }
+                            skip_ws_ptr(&cx);
+                            if (*cx == ':') cx++;
+                            skip_ws_ptr(&cx);
+                            if (strcmp(ck, "clearcoatFactor") == 0) {
+                                float fv; if (parse_json_number(&cx, &fv)) mats[n].cc_factor = fv;
+                            } else if (strcmp(ck, "clearcoatRoughnessFactor") == 0) {
+                                float fv; if (parse_json_number(&cx, &fv)) mats[n].cc_roughness = fv;
+                            } else if (strcmp(ck, "clearcoatNormalTexture") == 0) {
+                                const char* tx = cx;
+                                skip_ws_ptr(&tx);
+                                if (*tx == '{') tx++;
+                                while (*tx && *tx != '}') {
+                                    char tk[64];
+                                    const char* tsave = tx;
+                                    if (!parse_json_string(&tx, tk, sizeof(tk))) { tx = tsave; skip_value(&tx); continue; }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ':') tx++;
+                                    skip_ws_ptr(&tx);
+                                    float fv;
+                                    if (strcmp(tk, "index") == 0) {
+                                        if (parse_json_number(&tx, &fv)) mats[n].cc_nrm_tex = (int)fv;
+                                    } else {
+                                        skip_value(&tx);
+                                    }
+                                    skip_ws_ptr(&tx);
+                                    if (*tx == ',') tx++;
+                                }
+                                if (*tx == '}') tx++;
+                                cx = tx;
+                            } else {
+                                skip_value(&cx);
+                            }
+                            skip_ws_ptr(&cx);
+                            if (*cx == ',') cx++;
+                        }
+                        if (*cx == '}') cx++;
+                        ex = cx;
                     } else if (strcmp(ek, "KHR_materials_iridescence") == 0) {
                         const char* ix = ex;
                         skip_ws_ptr(&ix);
@@ -1777,6 +1898,12 @@ static void build_gltf_scene(
                 mo->nrm_scale = 1.0f;
                 mo->alpha_mode = 0;
                 mo->alpha_cutoff = 0.5f;
+                mo->aniso_factor = 0.0f;
+                mo->aniso_rotation = 0.0f;
+                mo->aniso_tex_index = -1;
+                mo->cc_factor = 0.0f;
+                mo->cc_roughness = 0.0f;
+                mo->cc_nrm_tex_index = -1;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1785,6 +1912,11 @@ static void build_gltf_scene(
                 float emissive[3] = {0, 0, 0};
                 float transmission = 0.0f;
                 float ior = 1.5f;
+                float aniso_strength = 0.0f;
+                float aniso_rotation = 0.0f;
+                int aniso_tex = -1;
+                float cc_factor = 0.0f;
+                float cc_roughness = 0.0f;
                 float iri_factor = 0.0f;
                 float iri_ior = 1.3f;
                 float iri_min = 100.0f;
@@ -1797,6 +1929,9 @@ static void build_gltf_scene(
                     metallic = materials[mat_idx].metallic;
                     roughness = materials[mat_idx].roughness;
                     memcpy(emissive, materials[mat_idx].emissive, 3 * sizeof(float));
+                    /* KHR_materials_emissive_strength: radiance = factor × strength. */
+                    for (int ei = 0; ei < 3; ei++)
+                        emissive[ei] *= materials[mat_idx].emissive_strength;
                     transmission = materials[mat_idx].transmission;
                     ior = materials[mat_idx].ior;
                     iri_factor = materials[mat_idx].iri_factor;
@@ -1848,10 +1983,34 @@ static void build_gltf_scene(
                                 mo->nrm_tex_index = img_idx;
                         }
                     }
+                    if (materials[mat_idx].aniso_tex >= 0) {
+                        int tex_idx = materials[mat_idx].aniso_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->aniso_tex_index = img_idx;
+                        }
+                    }
+                    aniso_strength = materials[mat_idx].aniso_strength;
+                    aniso_rotation = materials[mat_idx].aniso_rotation;
+                    cc_factor = materials[mat_idx].cc_factor;
+                    cc_roughness = materials[mat_idx].cc_roughness;
+                    if (materials[mat_idx].cc_nrm_tex >= 0) {
+                        int tex_idx = materials[mat_idx].cc_nrm_tex;
+                        if (tex_idx < num_tex) {
+                            int img_idx = tex_to_img[tex_idx];
+                            if (img_idx >= 0 && img_idx < num_texs)
+                                mo->cc_nrm_tex_index = img_idx;
+                        }
+                    }
                     mo->nrm_scale = materials[mat_idx].normal_scale;
                     mo->alpha_mode = materials[mat_idx].alpha_mode;
                     mo->alpha_cutoff = materials[mat_idx].alpha_cutoff;
                 }
+                mo->aniso_factor = aniso_strength;
+                mo->aniso_rotation = aniso_rotation;
+                mo->cc_factor = cc_factor;
+                mo->cc_roughness = cc_roughness;
                 mo->iri_factor = iri_factor;
                 mo->iri_ior = iri_ior;
                 mo->iri_thin_min = iri_min;
@@ -1865,7 +2024,7 @@ static void build_gltf_scene(
 
                 /* Debug: print final material props */
                 if (g_gltf_debug_enabled) {
-                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d iri_color_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d\n",
+                    fprintf(stderr, "  [mat] mesh_idx=%d mat_idx=%d base_color=(%.3f,%.3f,%.3f,%.3f) metallic=%.3f roughness=%.3f emissive=(%.3f,%.3f,%.3f) transmission=%.3f ior=%.3f iri=%.3f iri_ior=%.3f iri_nm=[%.0f,%.0f] iri_tex=%d iri_color_tex=%d vol_th=%.6g att=(%.4f,%.4f,%.4f) att_d=%.6g vol_tex=%d aniso=%.3f rot=%.3f aniso_tex=%d cc=%.3f ccRough=%.3f ccNrmTex=%d\n",
                             out->num_meshes, mat_idx,
                             base_color[0], base_color[1], base_color[2], base_color[3],
                             metallic, roughness,
@@ -1875,7 +2034,9 @@ static void build_gltf_scene(
                             mo->iri_tex_index, mo->iri_color_tex_index,
                             vol_th,
                             att_r, att_g, att_b,
-                            att_dist, mo->vol_tex_index);
+                            att_dist, mo->vol_tex_index,
+                            aniso_strength, aniso_rotation, mo->aniso_tex_index,
+                            cc_factor, cc_roughness, mo->cc_nrm_tex_index);
                 }
 
                 /* Classify material. */

@@ -72,6 +72,9 @@ The glTF test scenes (lamp, dragon, dish, suzanne, …) live in
 | KHR_materials_volume (Beer–Lambert absorption) | Done (ray-traced path length, both backends) |
 | Punctual lights (KHR_lights_punctual) | — |
 | KHR_materials_iridescence (thin film, three.js parity model; texture-driven factor + thickness, both slots) | Done (both backends) |
+| KHR_materials_emissive_strength (factor × strength applied at load; >1 radiance unclamped) | Done |
+| KHR_materials_anisotropy (anisotropic GGX direct + bent-normal mirror, three.js parity model; strength/rotation/texture, both backends) | Done (both backends) |
+| KHR_materials_clearcoat (second smooth GGX lobe + (1−cc·Fcc) energy, both backends; `ccN` = non-perturbed normal) | Direct lobe done; IBL + clearcoatNormalTexture open |
 | glTF baseColorTexture (sRGB→linear, bilinear) | Done |
 | glTF ORM roughness (G channel × factor) | Done (linear sampling both backends) |
 | Unified per-pixel PBR (unified plastic/metallic, ORM.B → metallic, F0 = mix(0.04, basecolor, metallic)) | Done |
@@ -133,6 +136,10 @@ the iridescence color lobe landed (2026-09-08); the full gate is green.
 
 Other plan documents, newest first:
 
+- [anisotropy_nextsteps.md](anisotropy_nextsteps.md) — AnisotropyBarnLamp
+  ingest (2026-09-11): emissive-strength and the anisotropic GGX +
+  bent-normal mirror port landed (both backends); clearcoat, GLB reader,
+  and the env-background seam remain open.
 - [iridescent_dish_nextsteps.md](iridescent_dish_nextsteps.md) — the active
   plan, anchored on **IridescentDishWithOlives** (IBL, normal maps, MASK,
   iridescence color lobe). Phases 1–5 landed; Phase 6 (polish) is open.

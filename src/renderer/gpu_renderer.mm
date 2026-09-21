@@ -192,6 +192,12 @@ typedef struct {
     float nrm_scale;
     int32_t alpha_mode;
     float alpha_cutoff;
+    float aniso_factor;
+    float aniso_rotation;
+    int32_t aniso_tex_index;
+    float cc_factor;
+    float cc_roughness;
+    int32_t cc_nrm_tex_index;
 } MeshMatGpu;
 
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
@@ -200,7 +206,7 @@ static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal"
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(TexMeta) == 12, "TexMeta layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 132, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 156, "MeshMatGpu layout must match shaders.metal");
 static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
@@ -405,6 +411,12 @@ Image* render_frame_gpu(const Scene* scene) {
                      mats[m].nrm_scale = mo->nrm_scale;
                      mats[m].alpha_mode = mo->alpha_mode;
                      mats[m].alpha_cutoff = mo->alpha_cutoff;
+                     mats[m].aniso_factor = mo->aniso_factor;
+                     mats[m].aniso_rotation = mo->aniso_rotation;
+                     mats[m].aniso_tex_index = mo->aniso_tex_index;
+                     mats[m].cc_factor = mo->cc_factor;
+                     mats[m].cc_roughness = mo->cc_roughness;
+                     mats[m].cc_nrm_tex_index = mo->cc_nrm_tex_index;
                    mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;

@@ -357,9 +357,15 @@ struct MeshMat {
     float nrm_scale;
     int alpha_mode;
     float alpha_cutoff;
+    float aniso_factor;
+    float aniso_rotation;
+    int aniso_tex_index;
+    float cc_factor;
+    float cc_roughness;
+    int cc_nrm_tex_index;
 };
 
-static_assert(sizeof(MeshMat) == 132, "MeshMat size must match gpu_renderer.mm");
+static_assert(sizeof(MeshMat) == 156, "MeshMat size must match gpu_renderer.mm");
 
 /* MASK alpha test, bit-exact mirror of the CPU chain (renderer.cc
    sample_alpha + the hit_mesh_bvh leaf test, D2/D3): barycentric->UV
@@ -1061,6 +1067,46 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                 }
             }
 
+            /* KHR_materials_anisotropy — mirror of the CPU twin (renderer.cc):
+               anisotropic GGX lobe.  Frame from the interpolated tangent
+               (mesh_tan) + the ray-facing normal; strength and tangent-space
+               direction from the anisotropyTexture (RG = direction, B =
+               strength; linear data, raw /255) scaled by the material
+               factor.  Gated on aniso_factor > 0 — scenes without an
+               anisotropic material stay byte-identical. */
+            float aniso = 0.0f;
+            float3 anisoT = float3(0.0f), anisoB = float3(0.0f);
+            if (hit_type == 2 && tris[mi].mesh_idx >= 0 && tris[mi].mesh_idx < nm &&
+                mats[tris[mi].mesh_idx].aniso_factor > 0.0f) {
+                int amid = tris[mi].mesh_idx;
+                float3 T = mesh_tan.xyz;
+                if (length(T) > EPS) {
+                    float sw = (mesh_tan.w >= 0.0f) ? 1.0f : -1.0f;
+                    float3 Tp = normalize(T - n_hit * dot(T, n_hit));
+                    float3 Bp = normalize(cross(n_hit, Tp) * sw);
+                    float cr = cos(mats[amid].aniso_rotation);
+                    float sr = sin(mats[amid].aniso_rotation);
+                    float dx = cr, dy = sr;
+                    aniso = mats[amid].aniso_factor;
+                    if (mats[amid].aniso_tex_index >= 0 && mats[amid].aniso_tex_index < num_textures &&
+                        mats[amid].aniso_tex_index < MAXTEX) {
+                        float3 c = sample_linear(scene_tex.t[mats[amid].aniso_tex_index], mesh_uv);
+                        float px = 2.0f * c.x - 1.0f, py = 2.0f * c.y - 1.0f;
+                        float pl2 = px * px + py * py;
+                        if (pl2 > 1e-12f) {
+                            float pl = sqrt(pl2);
+                            px /= pl; py /= pl;
+                        } else { px = 1.0f; py = 0.0f; }
+                        dx = cr * px - sr * py;
+                        dy = sr * px + cr * py;
+                        aniso *= c.z;
+                    }
+                    if (aniso > 1.0f) aniso = 1.0f;
+                    anisoT = normalize(Tp * dx + Bp * dy);
+                    anisoB = Bp * dx - Tp * dy;
+                }
+            }
+
             if (mat == MAT_EMISSIVE) {
                 accum += sc_col * (thru * Tseg);
                 break;
@@ -1121,10 +1167,28 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                  (direct, ambient, emissive) by (1 - transmission).  The
                  specular lobe and the mirror are untouched.  Spheres carry
                  no transmission factor (0) and are unchanged. */
-              float glass_trans = (mat == MAT_GLASS && hit_type == 2)
-                  ? min(1.0f, max(0.0f, strans)) : 0.0f;
+               float glass_trans = (mat == MAT_GLASS && hit_type == 2)
+                   ? min(1.0f, max(0.0f, strans)) : 0.0f;
 
-             float3 lit = float3(0.0f);
+              /* KHR_materials_clearcoat — direct lobe, mirror of the CPU twin
+                 (renderer.cc).  A second smooth GGX lobe (f0=0.04, f90=1,
+                 alpha=ccRough^2) on the NON-perturbed geometric normal `n_hit`
+                 (clearcoatNormal default = nonPerturbedNormal; base normal map
+                 deferred to Stage 3).  Gated on cc_factor > 0. */
+              float cc = 0.0f, ccRough = 0.0f, ccFcc = 0.0f;
+              float3 ccDirect = float3(0.0f);
+              if (hit_type == 2 && tris[mi].mesh_idx >= 0 && tris[mi].mesh_idx < nm &&
+                  mats[tris[mi].mesh_idx].cc_factor > 0.0f) {
+                  int cc_mid = tris[mi].mesh_idx;
+                  cc = min(1.0f, mats[cc_mid].cc_factor);
+                  ccRough = min(1.0f, max(0.0f, mats[cc_mid].cc_roughness));
+                  float3 eye = normalize(ro - p);
+                  float cvc = min(max(0.0f, dot(n_hit, eye)), 1.0f);
+                  float fresc = exp2((-5.55473f * cvc - 6.98316f) * cvc);
+                  ccFcc = 0.04f * (1.0f - fresc) + 1.0f * fresc;   /* F_Schlick(0.04,1) */
+              }
+
+              float3 lit = float3(0.0f);
              /* Shadow-ray self-avoid must skip the SHADING MESH by its mesh
                 index (in_shadow filters triangles by tris[].mesh_idx), matching
                 the CPU twin which passes the MeshObj index mi.  Passing the
@@ -1162,10 +1226,55 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                     float3 glw = sc_col * ss;
                     if (film_w > 0.0f) glw = glw * (1.0f - film_w) + film * film_w;
                     lit += sc_col * diff * lf * sao * (1.0f - glass_trans) + glw * sp * lf;
-                } else {
-                    lit += (sc_col * kd) * diff * lf * sao + f0u * sp * ss * lf;
-                }
-            }
+                } else if (aniso > 0.0f) {
+                    /* Anisotropic specular (three.js BRDF_GGX under USE_ANISOTROPY /
+                       KHR pseudo-code): F·V·D replaces the Blinn-Phong lobe.
+                       alphaT = mix(rough², 1, aniso²) stretches the lobe along
+                       the anisotropy tangent; alphaB = rough² stays isotropic. */
+                    float dotNV = max(0.0f, dot(n_pert, vw));
+                    float dotNH = max(0.0f, dot(n_pert, hv));
+                    float dotVH = max(0.0f, dot(vw, hv));
+                    float aB = srough * srough;
+                    float aT = aB + (1.0f - aB) * (aniso * aniso);
+                    float tV = dot(anisoT, vw), bV = dot(anisoB, vw);
+                    float tL = dot(anisoT, ld), bL = dot(anisoB, ld);
+                    float tH = dot(anisoT, hv), bH = dot(anisoB, hv);
+                    float gv = diff * sqrt(aT*aT*tV*tV + aB*aB*bV*bV + dotNV*dotNV);
+                    float gl = dotNV * sqrt(aT*aT*tL*tL + aB*aB*bL*bL + diff*diff);
+                    float Vs = min(1.0f, 0.5f / max(gv + gl, 1e-8f));
+                    float a2 = aT * aB;
+                    float3 v = float3(aB * tH, aT * bH, a2 * dotNH);
+                    float v2 = dot(v, v);
+                    float w2 = v2 > 0.0f ? a2 / v2 : 0.0f;
+                    float Ds = 0.31830988618379067154f * a2 * w2 * w2;   /* RECIPROCAL_PI */
+                    float fres = exp2((-5.55473f * dotVH - 6.98316f) * dotVH);
+                    float3 F = f0u * (1.0f - fres) + float3(1.0f) * fres;
+                    lit += (sc_col * kd) * diff * lf * sao + F * (Vs * Ds) * (diff * lf);
+                 } else {
+                     lit += (sc_col * kd) * diff * lf * sao + f0u * sp * ss * lf;
+                 }
+                 if (cc > 0.0f) {
+                     /* Clearcoat direct lobe (three.js BRDF_GGX_Clearcoat):
+                        D_GGX * V_GGX_SmithCorrelated * F_Schlick on `n_hit`,
+                        alpha = ccRough^2.  Accumulated separately (added at
+                        the composite, scaled by cc; not in `lit`). */
+                     float dotNLcc = max(0.0f, dot(n_hit, ld));
+                     float dotNVcc = max(0.0f, dot(n_hit, vw));
+                     float dotNHcc = max(0.0f, dot(n_hit, hv));
+                     float dotVHcc = max(0.0f, dot(vw, hv));
+                     float alpha = ccRough * ccRough;
+                     float a2c = alpha * alpha;
+                     float dc = dotNHcc * dotNHcc * (a2c - 1.0f) + 1.0f;
+                     float Dcc = 0.31830988618379067154f * a2c / (dc * dc);   /* RECIPROCAL_PI */
+                     float gvc = dotNLcc * sqrt(a2c + (1.0f - a2c) * dotNVcc * dotNVcc);
+                     float glc = dotNVcc * sqrt(a2c + (1.0f - a2c) * dotNLcc * dotNLcc);
+                     float Vcc = 0.5f / max(gvc + glc, 1e-8f);
+                     float frc = exp2((-5.55473f * dotVHcc - 6.98316f) * dotVHcc);
+                     float Fc = 0.04f * (1.0f - frc) + 1.0f * frc;
+                     float ccw = Fc * Vcc * Dcc * dotNLcc * lf;
+                     ccDirect += float3(ccw);
+                 }
+             }
             for (int ei = 0; ei < ne; ei++) {
                 int skip_sph = -1, skip_mesh = -1;
                 float3 lp, ln;
@@ -1214,10 +1323,16 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             } else {
                 amb = sc_col * (0.15f * sao * (1.0f - glass_trans));
             }
-            float3 base = amb + lit;
-            /* Surface light leaving an in-medium hit must travel the
-               already traversed segment back through the medium. */
-            accum += base * (thru * Tseg);
+             float3 base = amb + lit;
+             /* Surface light leaving an in-medium hit must travel the
+                already traversed segment back through the medium.
+                Clearcoat composite (three.js meshphysical): dim the base
+                outgoing by (1 - cc*Fcc) and add the coat lobe scaled by cc.
+                cc==0 -> byte-identical to `accum += base * (thru * Tseg)`. */
+             if (cc > 0.0f)
+                 accum += (base * (1.0f - cc * ccFcc) + ccDirect * cc) * (thru * Tseg);
+             else
+                 accum += base * (thru * Tseg);
 
             if (depth == MAX_DEPTH) break;
 
@@ -1227,18 +1342,37 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             cos_i = entering ? -cos_i : cos_i;
 
             float3 refl_d = reflect(rd, na);
+            if (aniso > 0.0f) {
+                /* Anisotropic mirror (three.js getIBLAnisotropyRadiance): the
+                   mirror ray reflects about a bent normal stretched along the
+                   bitangent (Filament's single-sample PMREM approximation).
+                   sr is unchanged, so escaped mirror rays keep sampling the
+                   prefiltered env at the surface roughness. */
+                float3 view = -rd;
+                float3 b1 = cross(anisoB, view);
+                float3 bent = cross(b1, anisoB);
+                if (dot(bent, bent) > 1e-12f) bent = normalize(bent);
+                else bent = n_hit;
+                float ma = 1.0f - aniso * (1.0f - srough);
+                ma = ma * ma; ma = ma * ma;
+                bent = normalize(bent * (1.0f - ma) + n_hit * ma);
+                refl_d = reflect(rd, bent);
+            }
             float3 refl_o = p + refl_d * EPS;
 
-            if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
-                /* Unified PBR mirror: keep tracing the reflection ray,
-                   tinting throughput per-channel by F0 (the old
-                   basecolor-tinted metal mirror at metallic=1). */
-                ro = refl_o;
-                rd = refl_d;
-                thru = (thru * Tseg) * f0u;
-                sr = srough;   /* this surface scatters: env-escape blurs by its roughness */
-                continue;
-            }
+             if (mat == MAT_PLASTIC || mat == MAT_METALLIC) {
+                 /* Unified PBR mirror: keep tracing the reflection ray,
+                    tinting throughput per-channel by F0 (the old
+                    basecolor-tinted metal mirror at metallic=1).  Clearcoat
+                    dims the downstream mirror by (1 - cc*Fcc) so the coat
+                    energy matches the CPU composite (cc==0: unchanged). */
+                 ro = refl_o;
+                 rd = refl_d;
+                 thru = (thru * Tseg) * f0u;
+                 if (cc > 0.0f) thru = thru * (1.0f - cc * ccFcc);
+                 sr = srough;   /* this surface scatters: env-escape blurs by its roughness */
+                 continue;
+             }
 
             /* Hit geometry (see the CPU twin): on a mesh face the
                `entering` flag is ALWAYS true (the returned normal is

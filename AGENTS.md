@@ -27,7 +27,7 @@ gate (see "Render parity" below).
 - Thin-film math parity (the iridescence twin of `volcheck`): `tools/iri_check.c` (float32, includes `thin_film.h`) vs `tools/iri_ref_check.mjs` (float64 port of the three.js GLSL). No make target — `g++ -O2 -I./include -std=c++11 tools/iri_check.c -o /tmp/iri_check -lm`, run both, max abs diff ≤ 1e-3 (currently 1.5e-6). The `.mjs` reads GLSL from `web_viewer/node_modules/three` (gitignored — `npm install` in `web_viewer/` first on a fresh clone).
 - `test_scenes/lamp_glass_mask.ppm` is committed (`*.ppm` is gitignored; it was force-added). Use the committed file, do not regenerate it.
 - `make models` regenerates the procedural meshes in `models/` — regenerate, never hand-edit.
-- Working plan docs are the record of project state (rebaseline history, open bugs): `iridescent_dish_nextsteps.md` (active feature plan), `glass_parity_nextsteps.md` (closed 2026-09-05 — see "Open items"), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps". Note `nextsteps.md` has drifted: its line-number citations are stale and some items listed as deferred are already done — verify against HEAD.
+- Working plan docs are the record of project state (rebaseline history, open bugs): `iridescent_dish_nextsteps.md` (active feature plan), `anisotropy_nextsteps.md` (2026-09-11 — AnisotropyBarnLamp ingest; aniso GGX + emissive-strength done, clearcoat gap open), `glass_parity_nextsteps.md` (closed 2026-09-05 — see "Open items"), `dragon_nextsteps.md`, `nextsteps.md` (lamp history). See README "Next Steps". Note `nextsteps.md` has drifted: its line-number citations are stale and some items listed as deferred are already done — verify against HEAD.
 
 ## Render parity (Tier 1 gate)
 

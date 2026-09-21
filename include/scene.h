@@ -61,6 +61,12 @@ typedef struct {
     float nrm_scale;         /* normalTexture.scale, default 1.0 */
     int32_t alpha_mode;      /* 0 = OPAQUE, 1 = MASK */
     float alpha_cutoff;      /* alphaCutoff, default 0.5 */
+    float aniso_factor;      /* KHR_materials_anisotropy strength, default 0 */
+    float aniso_rotation;    /* anisotropyRotation, radians, default 0 */
+    int32_t aniso_tex_index; /* anisotropyTexture image index, -1 = none */
+    float cc_factor;         /* KHR_materials_clearcoat clearcoatFactor, default 0 */
+    float cc_roughness;      /* clearcoatRoughnessFactor, default 0 */
+    int32_t cc_nrm_tex_index;/* clearcoatNormalTexture image index, -1 = none */
 } MeshObj;
 
 typedef struct {

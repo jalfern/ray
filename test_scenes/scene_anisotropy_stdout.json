@@ -1,0 +1,42 @@
+{
+ "camera": {
+  "pos": [
+   -0.16,
+   -0.13,
+   0.68
+  ],
+  "target": [
+   0,
+   -0.045,
+   0.11
+  ],
+  "fov_y": 32,
+  "aperture": 0
+ },
+ "gltf": "AnisotropyBarnLamp/AnisotropyBarnLamp.gltf",
+ "lights": [
+  {
+   "pos": [
+    1,
+    1,
+    1
+   ],
+   "size": 0.3
+  },
+  {
+   "pos": [
+    -0.5,
+    0.8,
+    -0.5
+   ],
+   "size": 0.2
+  }
+ ],
+ "environment": {
+  "file": "envmaps/polyhaven_studio_small_03_1k.hdr",
+  "intensity": 1.0
+ },
+ "floor": true,
+ "width": 768,
+ "height": 876
+}
