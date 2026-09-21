@@ -67,6 +67,7 @@ typedef struct {
     float cc_factor;         /* KHR_materials_clearcoat clearcoatFactor, default 0 */
     float cc_roughness;      /* clearcoatRoughnessFactor, default 0 */
     int32_t cc_nrm_tex_index;/* clearcoatNormalTexture image index, -1 = none */
+    float cc_nrm_scale;      /* clearcoatNormalTexture.scale, default 1.0 */
 } MeshObj;
 
 typedef struct {

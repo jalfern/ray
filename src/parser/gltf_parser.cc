@@ -878,6 +878,7 @@ typedef struct {
     float cc_factor;         /* KHR_materials_clearcoat clearcoatFactor, default 0 */
     float cc_roughness;      /* clearcoatRoughnessFactor, default 0 */
     int cc_nrm_tex;          /* clearcoatNormalTexture index, -1 = none */
+    float cc_nrm_scale;      /* clearcoatNormalTexture.scale, default 1.0 */
     float transmission;    /* 0-1, default 0 */
     float ior;             /* 1.0-3.0, default 1.5 */
     float iri_factor;      /* iridescenceFactor 0-1, default 0 */
@@ -1180,6 +1181,7 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
         mats[n].emissive_strength = 1.0f;
         mats[n].aniso_tex = -1;
         mats[n].cc_nrm_tex = -1;
+        mats[n].cc_nrm_scale = 1.0f;
         mats[n].iri_ior = 1.3f;
         mats[n].iri_thin_min = 100.0f;
         mats[n].iri_thin_max = 400.0f;
@@ -1494,6 +1496,8 @@ static int parse_materials(const char** j, GltfMaterial* mats, int max) {
                                     float fv;
                                     if (strcmp(tk, "index") == 0) {
                                         if (parse_json_number(&tx, &fv)) mats[n].cc_nrm_tex = (int)fv;
+                                    } else if (strcmp(tk, "scale") == 0) {
+                                        if (parse_json_number(&tx, &fv)) mats[n].cc_nrm_scale = fv;
                                     } else {
                                         skip_value(&tx);
                                     }
@@ -1904,6 +1908,7 @@ static void build_gltf_scene(
                 mo->cc_factor = 0.0f;
                 mo->cc_roughness = 0.0f;
                 mo->cc_nrm_tex_index = -1;
+                mo->cc_nrm_scale = 1.0f;
 
                 /* Look up material properties. */
                 float base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
@@ -1995,6 +2000,7 @@ static void build_gltf_scene(
                     aniso_rotation = materials[mat_idx].aniso_rotation;
                     cc_factor = materials[mat_idx].cc_factor;
                     cc_roughness = materials[mat_idx].cc_roughness;
+                    mo->cc_nrm_scale = materials[mat_idx].cc_nrm_scale;
                     if (materials[mat_idx].cc_nrm_tex >= 0) {
                         int tex_idx = materials[mat_idx].cc_nrm_tex;
                         if (tex_idx < num_tex) {

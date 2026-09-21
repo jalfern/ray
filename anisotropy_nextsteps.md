@@ -19,7 +19,7 @@ legacy set, but it is under the cert bar — `ok`, not `known-bug`.
 | Extension | Where | Status |
 |---|---|---|
 | KHR_materials_anisotropy (strength 1 + texture + rotation 0) | shade, mount arm | done (2026-09-11, both backends — see gap 1) |
-| KHR_materials_clearcoat (0.25 / rough 0.15 + normal tex) | shade, back plate | direct + IBL + energy done (Stages 1–2, both backends); clearcoatNormal open |
+| KHR_materials_clearcoat (0.25 / rough 0.15 + normal tex) | shade, back plate | done (Stages 1–3, both backends) |
 | KHR_materials_emissive_strength (25x) | filament | done (2026-09-11: factor × strength at load) |
 | KHR_materials_transmission + volume (thick 0.01) | glass bulb | done |
 
@@ -53,19 +53,20 @@ legacy set, but it is under the cert bar — `ok`, not `known-bug`.
    `shaders.metal`), so no shader mirror was needed — parser-only change.
    Default strength 1.0 keeps every other scene bit-identical (verified:
    full gate set PASSes with signatures unchanged to the digit).
-3. **Clearcoat — direct + IBL LANDED (2026-09, Stages 0–2).** Loader parses
-   `KHR_materials_clearcoat` (factor/roughness/normalTexture) plumbed through
-   `MeshObj`/`MeshMatGpu`/`MeshMat` (struct 144→156, paired asserts). Stage 1
-   adds the direct GGX lobe (`f0=0.04`, `alpha=ccRough²`) + the
-   `outgoing·(1−cc·Fcc) + cc·lobe` composite, mirrored op-for-op CPU↔GPU
-   (`ccN` = non-perturbed normal). Gate green; non-coat scenes byte-identical
-   (cc>0 gate airtight); aniso rebaselined `ok`. Stage 2 (2026-09) adds the
-   clearcoat IBL — prefiltered PMREM tap about `ccN` at `ccRough` (three's
-   `mix(reflect, N, rough²)`), weighted by the Karis DFGApprox `EnvironmentBRDF`
-   (f0=0.04, f90=1), added into the `cc·(direct + indirect)` composite; both
-   backends read the same CPU mip chain (envtest path). Aniso rebaselined `ok`
-   again (p99_9=14, n_severe=0). **Still open:** Stage 3 `clearcoatNormalTexture`
-   (reuse the existing TBN).
+3. **Clearcoat — LANDED (2026-09, Stages 0–3).** Loader parses
+   `KHR_materials_clearcoat` (factor/roughness/normalTexture + scale) plumbed
+   through `MeshObj`/`MeshMatGpu`/`MeshMat` (struct 144→156→160, paired
+   asserts). Stage 1: the direct GGX lobe (`f0=0.04`, `alpha=ccRough²`) + the
+   `outgoing·(1−cc·Fcc) + cc·lobe` composite, mirrored op-for-op CPU↔GPU.
+   Stage 2: clearcoat IBL — prefiltered PMREM tap about `ccN` at `ccRough`
+   (three's `mix(reflect, N, rough²)`), weighted by the Karis DFGApprox
+   `EnvironmentBRDF` (f0=0.04, f90=1), in the `cc·(direct + indirect)`
+   composite; both backends read the same CPU mip chain (envtest path).
+   Stage 3: `clearcoatNormalTexture` — `ccN` perturbed by `tbn2·(2·map−1)`
+   (xy × `clearcoatNormalScale`) via the same MikkTSpace frame the aniso port
+   builds; the coat reads only its own map, never the base normal map. Gate
+   green throughout; non-coat scenes byte-identical every stage (cc>0 gate
+   airtight); aniso rebaselined `ok` (final p99_9=15, n_severe=0).
 4. **No GLB container.** Had to unpack the `.glb` by hand into
    `.gltf` + `.bin` + 4 PNGs (kept in `test_scenes/AnisotropyBarnLamp/`).
    A GLB reader (12-byte header, JSON/BIN chunks, embedded buffer + images)

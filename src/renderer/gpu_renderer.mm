@@ -198,6 +198,7 @@ typedef struct {
     float cc_factor;
     float cc_roughness;
     int32_t cc_nrm_tex_index;
+    float cc_nrm_scale;
 } MeshMatGpu;
 
 static_assert(sizeof(SphereGpu) == 64, "SphereGpu layout must match shaders.metal");
@@ -206,7 +207,7 @@ static_assert(sizeof(LightGpu) == 16, "LightGpu layout must match shaders.metal"
 static_assert(sizeof(SceneGpu) == 140, "SceneGpu layout must match shaders.metal");
 static_assert(sizeof(EmissiveGpu) == 52, "EmissiveGpu layout must match shaders.metal");
 static_assert(sizeof(TexMeta) == 12, "TexMeta layout must match shaders.metal");
-static_assert(sizeof(MeshMatGpu) == 156, "MeshMatGpu layout must match shaders.metal");
+static_assert(sizeof(MeshMatGpu) == 160, "MeshMatGpu layout must match shaders.metal");
 static_assert(sizeof(TriGpu) == 148, "TriGpu layout must match shaders.metal");
 
 // Cached GPU pipeline — initialized once on first call.
@@ -417,6 +418,7 @@ Image* render_frame_gpu(const Scene* scene) {
                      mats[m].cc_factor = mo->cc_factor;
                      mats[m].cc_roughness = mo->cc_roughness;
                      mats[m].cc_nrm_tex_index = mo->cc_nrm_tex_index;
+                     mats[m].cc_nrm_scale = mo->cc_nrm_scale;
                    mats[m].mat_type = gpu_mat_name_to_type(gpu_material(mo, 0));
                  mats[m].tex_type = mo->tex_type;
                  mats[m].tex_scale = mo->tex_scale;

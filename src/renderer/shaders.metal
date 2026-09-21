@@ -363,9 +363,10 @@ struct MeshMat {
     float cc_factor;
     float cc_roughness;
     int cc_nrm_tex_index;
+    float cc_nrm_scale;
 };
 
-static_assert(sizeof(MeshMat) == 156, "MeshMat size must match gpu_renderer.mm");
+static_assert(sizeof(MeshMat) == 160, "MeshMat size must match gpu_renderer.mm");
 
 /* MASK alpha test, bit-exact mirror of the CPU chain (renderer.cc
    sample_alpha + the hit_mesh_bvh leaf test, D2/D3): barycentric->UV
@@ -1177,13 +1178,33 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                  deferred to Stage 3).  Gated on cc_factor > 0. */
               float cc = 0.0f, ccRough = 0.0f, ccFcc = 0.0f;
               float3 ccDirect = float3(0.0f);
+              float3 ccN = n_hit;   /* three.js clearcoatNormal default = nonPerturbedNormal */
               if (hit_type == 2 && tris[mi].mesh_idx >= 0 && tris[mi].mesh_idx < nm &&
                   mats[tris[mi].mesh_idx].cc_factor > 0.0f) {
                   int cc_mid = tris[mi].mesh_idx;
                   cc = min(1.0f, mats[cc_mid].cc_factor);
                   ccRough = min(1.0f, max(0.0f, mats[cc_mid].cc_roughness));
+                  /* clearcoatNormalTexture (Stage 3): tbn2*(2*map-1), xy scaled
+                     by clearcoatNormalScale — same MikkTSpace frame as the aniso
+                     port; coat reads only its own map. */
+                  if (mats[cc_mid].cc_nrm_tex_index >= 0 &&
+                      mats[cc_mid].cc_nrm_tex_index < num_textures &&
+                      mats[cc_mid].cc_nrm_tex_index < MAXTEX) {
+                      float3 T = mesh_tan.xyz;
+                      if (length(T) > EPS) {
+                          float sw = (mesh_tan.w >= 0.0f) ? 1.0f : -1.0f;
+                          float3 Tp = normalize(T - n_hit * dot(T, n_hit));
+                          float3 Bp = normalize(cross(n_hit, Tp) * sw);
+                          float3 c = sample_linear(scene_tex.t[mats[cc_mid].cc_nrm_tex_index], mesh_uv);
+                          float s = mats[cc_mid].cc_nrm_scale;
+                          float mx = (2.0f * c.x - 1.0f) * s;
+                          float my = (2.0f * c.y - 1.0f) * s;
+                          float mz = (2.0f * c.z - 1.0f);
+                          ccN = normalize(Tp * mx + Bp * my + n_hit * mz);
+                      }
+                  }
                   float3 eye = normalize(ro - p);
-                  float cvc = min(max(0.0f, dot(n_hit, eye)), 1.0f);
+                  float cvc = min(max(0.0f, dot(ccN, eye)), 1.0f);
                   float fresc = exp2((-5.55473f * cvc - 6.98316f) * cvc);
                   ccFcc = 0.04f * (1.0f - fresc) + 1.0f * fresc;   /* F_Schlick(0.04,1) */
               }
@@ -1258,9 +1279,9 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
                         D_GGX * V_GGX_SmithCorrelated * F_Schlick on `n_hit`,
                         alpha = ccRough^2.  Accumulated separately (added at
                         the composite, scaled by cc; not in `lit`). */
-                     float dotNLcc = max(0.0f, dot(n_hit, ld));
-                     float dotNVcc = max(0.0f, dot(n_hit, vw));
-                     float dotNHcc = max(0.0f, dot(n_hit, hv));
+                     float dotNLcc = max(0.0f, dot(ccN, ld));
+                     float dotNVcc = max(0.0f, dot(ccN, vw));
+                     float dotNHcc = max(0.0f, dot(ccN, hv));
                      float dotVHcc = max(0.0f, dot(vw, hv));
                      float alpha = ccRough * ccRough;
                      float a2c = alpha * alpha;
@@ -1331,10 +1352,10 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
              float3 ccIndirect = float3(0.0f);
              if (cc > 0.0f && has_env) {
                  float b = ccRough * ccRough;
-                 float3 rr = reflect(rd, n_hit);                    /* reflect(-V, ccN) */
-                 float3 dir = normalize(rr * (1.0f - b) + n_hit * b);
+                 float3 rr = reflect(rd, ccN);                      /* reflect(-V, ccN) */
+                 float3 dir = normalize(rr * (1.0f - b) + ccN * b);
                  float3 ccRad = sample_env_prefiltered(env_mip, env_w, env_h, dir, ccRough, env_mips);
-                 float nv = min(max(0.0f, dot(n_hit, normalize(ro - p))), 1.0f);
+                 float nv = min(max(0.0f, dot(ccN, normalize(ro - p))), 1.0f);
                  float rx = 1.0f - ccRough;
                  float ry = 0.0425f - 0.0275f * ccRough;
                  float rz = 1.04f - 0.572f * ccRough;

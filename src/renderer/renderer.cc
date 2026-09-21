@@ -892,26 +892,46 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
         }
     }
 
-    /* KHR_materials_clearcoat — direct lobe (three.js BRDF_GGX_Clearcoat +
-       meshphysical composite; mirrored op-for-op into shaders.metal).  A
-       smooth isotropic dielectric coat over the base layer: a second GGX lobe
-       (f0=0.04, f90=1, alpha=ccRough^2) evaluated against the NON-perturbed
-       geometric normal `n` (three.js clearcoatNormal default = the
-       nonPerturbedNormal; the base normal map is NOT applied to the coat
-       until the Stage-3 clearcoatNormal port).  Base outgoing is dimmed by
-       (1 - cc*Fcc) and the coat lobe added on top (composite at the return).
-       Gated on cc_factor > 0 so non-coat scenes stay byte-identical. */
-    float cc = 0.0f, ccRough = 0.0f, ccFcc = 0.0f;
-    V ccDirect = {0, 0, 0};
-    if (hit_type == 2 && meshes[mi].cc_factor > 0.0f) {
-        cc = fminf(1.0f, meshes[mi].cc_factor);
-        ccRough = fminf(1.0f, fmaxf(0.0f, meshes[mi].cc_roughness));
-        V eyeDir = norm(sub(o, p));
-        float cvc = fmaxf(0.0f, dot(n, eyeDir));
-        if (cvc > 1.0f) cvc = 1.0f;
-        float fresc = exp2f((-5.55473f * cvc - 6.98316f) * cvc);
-        ccFcc = 0.04f * (1.0f - fresc) + 1.0f * fresc;   /* F_Schlick(0.04,1) */
-    }
+     /* KHR_materials_clearcoat — direct lobe + IBL (three.js BRDF_GGX_Clearcoat
+        + meshphysical composite; mirrored op-for-op into shaders.metal).  A
+        smooth isotropic dielectric coat over the base layer: a second GGX lobe
+        (f0=0.04, f90=1, alpha=ccRough^2) evaluated against the clearcoat
+        normal `ccN` — the non-perturbed normal by default (three.js
+        clearcoatNormal = nonPerturbedNormal), perturbed by the tangent-space
+        clearcoatNormalTexture when present (Stage 3, via the same MikkTSpace
+        frame the aniso port builds — the coat reads only its own map, never
+        the base normal map).  Base outgoing is dimmed by (1 - cc*Fcc) and the
+        coat lobe added on top (composite at the return).  Gated cc_factor>0. */
+     float cc = 0.0f, ccRough = 0.0f, ccFcc = 0.0f;
+     V ccDirect = {0, 0, 0};
+     V ccN = n;   /* three.js clearcoatNormal: default = nonPerturbedNormal */
+     if (hit_type == 2 && meshes[mi].cc_factor > 0.0f) {
+         cc = fminf(1.0f, meshes[mi].cc_factor);
+         ccRough = fminf(1.0f, fmaxf(0.0f, meshes[mi].cc_roughness));
+         /* clearcoatNormalTexture (Stage 3): tbn2*(2*map-1), xy scaled by
+            clearcoatNormalScale — three.js clearcoat_normal_fragment_maps. */
+         if (meshes[mi].cc_nrm_tex_index >= 0 &&
+             meshes[mi].cc_nrm_tex_index < num_textures && textures) {
+             V T = (V){m_tan[0], m_tan[1], m_tan[2]};
+             if (sqrtf(dot(T, T)) > EPS) {
+                 float sw = (m_tan[3] >= 0.0f) ? 1.0f : -1.0f;
+                 V Tp = norm(sub(T, mul(n, dot(T, n))));
+                 V Bp = norm(mul(cross(n, Tp), sw));
+                 V c = sample_linear3(&textures[meshes[mi].cc_nrm_tex_index],
+                                      m_uv[0], m_uv[1]);
+                 float s = meshes[mi].cc_nrm_scale;
+                 float mx = (2.0f * c.x - 1.0f) * s;
+                 float my = (2.0f * c.y - 1.0f) * s;
+                 float mz = (2.0f * c.z - 1.0f);
+                 ccN = norm(add(add(mul(Tp, mx), mul(Bp, my)), mul(n, mz)));
+             }
+         }
+         V eyeDir = norm(sub(o, p));
+         float cvc = fmaxf(0.0f, dot(ccN, eyeDir));
+         if (cvc > 1.0f) cvc = 1.0f;
+         float fresc = exp2f((-5.55473f * cvc - 6.98316f) * cvc);
+         ccFcc = 0.04f * (1.0f - fresc) + 1.0f * fresc;   /* F_Schlick(0.04,1) */
+     }
 
     if (mat == MAT_EMISSIVE) return (V){sc.x * Tseg.x, sc.y * Tseg.y, sc.z * Tseg.z};
 
@@ -1040,9 +1060,9 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
                V_GGX_SmithCorrelated * F_Schlick on the geometric normal `n`,
                alpha = ccRough^2.  Accumulated separately (added at the return,
                scaled by cc; not folded into `lit`, which is dimmed by (1-cc*Fcc)). */
-            float dotNLcc = fmaxf(0.0f, dot(n, light_dir));
-            float dotNVcc = fmaxf(0.0f, dot(n, view));
-            float dotNHcc = fmaxf(0.0f, dot(n, half));
+            float dotNLcc = fmaxf(0.0f, dot(ccN, light_dir));
+            float dotNVcc = fmaxf(0.0f, dot(ccN, view));
+            float dotNHcc = fmaxf(0.0f, dot(ccN, half));
             float dotVHcc = fmaxf(0.0f, dot(view, half));
             float alpha = ccRough * ccRough;
             float a2c = alpha * alpha;
@@ -1166,11 +1186,11 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
             V ccIndirect = {0, 0, 0};
             if (env && env->data) {
                 float b = ccRough * ccRough;
-                V rr = sub(d, mul(n, 2.0f * dot(d, n)));          /* reflect(-V, ccN) */
-                V dir = norm(add(mul(rr, 1.0f - b), mul(n, b)));  /* mix(refl, N, rough^2) */
+                V rr = sub(d, mul(ccN, 2.0f * dot(d, ccN)));          /* reflect(-V, ccN) */
+                V dir = norm(add(mul(rr, 1.0f - b), mul(ccN, b)));    /* mix(refl, ccN, rough^2) */
                 float er, eg, eb;
                 envmap_sample_prefiltered(env, dir.x, dir.y, dir.z, ccRough, &er, &eg, &eb);
-                float nv = fmaxf(0.0f, dot(n, norm(sub(o, p))));
+                float nv = fmaxf(0.0f, dot(ccN, norm(sub(o, p))));
                 if (nv > 1.0f) nv = 1.0f;
                 float rx = 1.0f - ccRough;
                 float ry = 0.0425f - 0.0275f * ccRough;
@@ -1428,6 +1448,7 @@ static RenderContext setup_context(const Scene* scene) {
             meshes[i].cc_factor = scene->meshes[i].cc_factor;
             meshes[i].cc_roughness = scene->meshes[i].cc_roughness;
             meshes[i].cc_nrm_tex_index = scene->meshes[i].cc_nrm_tex_index;
+            meshes[i].cc_nrm_scale = scene->meshes[i].cc_nrm_scale;
             const char* mat = scene->meshes[i].material[0] ? scene->meshes[i].material : "glass";
             meshes[i].mat_type = mat_name_to_type(mat);
             meshes[i].tex.type = scene->meshes[i].tex_type;

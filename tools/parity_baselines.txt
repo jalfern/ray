@@ -42,4 +42,4 @@ ok	test_scenes/scene_suzanne_stdout.json	334	426	4	4	0
 ok	test_scenes/scene_dragon_stdout.json	23353	54186	205	20	4
 ok	test_scenes/scene_lamp_stdout.json	8627	10698	64	19	0
 ok	test_scenes/scene_envtest_stdout.json	704	1041	5	5	0
-ok	test_scenes/scene_anisotropy_stdout.json	16603	40398	35	14	0
+ok	test_scenes/scene_anisotropy_stdout.json	16691	41269	49	15	0
