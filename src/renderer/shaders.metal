@@ -1323,14 +1323,34 @@ static float3 trace_ray(float3 o, float3 d, device const SphereGpu* spheres, int
             } else {
                 amb = sc_col * (0.15f * sao * (1.0f - glass_trans));
             }
+             /* Clearcoat IBL (three.js RE_IndirectSpecular / getIBLRadiance):
+                reflect the view about ccN, bias toward ccN by ccRough^2, tap the
+                CPU mip chain at ccRough, weight by the Karis DFGApprox
+                (EnvironmentBRDF, f0=0.04, f90=1).  Explicit tap (the prefiltered
+                path, not the traced base mirror); no env -> no indirect. */
+             float3 ccIndirect = float3(0.0f);
+             if (cc > 0.0f && has_env) {
+                 float b = ccRough * ccRough;
+                 float3 rr = reflect(rd, n_hit);                    /* reflect(-V, ccN) */
+                 float3 dir = normalize(rr * (1.0f - b) + n_hit * b);
+                 float3 ccRad = sample_env_prefiltered(env_mip, env_w, env_h, dir, ccRough, env_mips);
+                 float nv = min(max(0.0f, dot(n_hit, normalize(ro - p))), 1.0f);
+                 float rx = 1.0f - ccRough;
+                 float ry = 0.0425f - 0.0275f * ccRough;
+                 float rz = 1.04f - 0.572f * ccRough;
+                 float rw = 0.022f * ccRough - 0.04f;
+                 float a004 = min(rx * rx, exp2(-9.28f * nv)) * rx + ry;
+                 float ebrdf = 0.04f * (rz - 1.04f * a004) + (1.04f * a004 + rw);
+                 ccIndirect = ccRad * ebrdf;
+             }
              float3 base = amb + lit;
              /* Surface light leaving an in-medium hit must travel the
                 already traversed segment back through the medium.
                 Clearcoat composite (three.js meshphysical): dim the base
-                outgoing by (1 - cc*Fcc) and add the coat lobe scaled by cc.
+                outgoing by (1 - cc*Fcc) and add cc*(direct + indirect).
                 cc==0 -> byte-identical to `accum += base * (thru * Tseg)`. */
              if (cc > 0.0f)
-                 accum += (base * (1.0f - cc * ccFcc) + ccDirect * cc) * (thru * Tseg);
+                 accum += (base * (1.0f - cc * ccFcc) + (ccDirect + ccIndirect) * cc) * (thru * Tseg);
              else
                  accum += base * (thru * Tseg);
 

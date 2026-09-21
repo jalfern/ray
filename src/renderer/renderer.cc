@@ -1156,10 +1156,34 @@ static V trace_ray(V o, V d, int depth, SphereData* spheres, int num_spheres,
            (the old basecolor-tinted metal mirror at metallic=1). */
         V outgoing = add(base_color, (V){refl_col.x * f0mix.x, refl_col.y * f0mix.y, refl_col.z * f0mix.z});
         if (cc > 0.0f) {
-            /* three.js meshphysical: outgoing*(1 - cc*Fcc) + cc*clearcoatSpecular.
-               ccDirect carries its own in-medium Tseg (base/refl already did). */
+            /* three.js meshphysical: outgoing*(1 - cc*Fcc) + cc*(direct + indirect).
+               indirect = getIBLRadiance(ccN, ccRough) * EnvironmentBRDF(ccN,view,
+               0.04,1,ccRough): reflect the view about ccN, bias toward ccN by
+               ccRough^2 (three's getIBLRadiance mix — the prefiltered tap here is
+               explicit, unlike the traced base mirror), sample the CPU mip chain at
+               ccRough, weight by the Karis DFGApprox (f0=0.04, f90=1).  No loaded
+               env -> no indirect (three.js gates clearcoat indirect on USE_ENVMAP). */
+            V ccIndirect = {0, 0, 0};
+            if (env && env->data) {
+                float b = ccRough * ccRough;
+                V rr = sub(d, mul(n, 2.0f * dot(d, n)));          /* reflect(-V, ccN) */
+                V dir = norm(add(mul(rr, 1.0f - b), mul(n, b)));  /* mix(refl, N, rough^2) */
+                float er, eg, eb;
+                envmap_sample_prefiltered(env, dir.x, dir.y, dir.z, ccRough, &er, &eg, &eb);
+                float nv = fmaxf(0.0f, dot(n, norm(sub(o, p))));
+                if (nv > 1.0f) nv = 1.0f;
+                float rx = 1.0f - ccRough;
+                float ry = 0.0425f - 0.0275f * ccRough;
+                float rz = 1.04f - 0.572f * ccRough;
+                float rw = 0.022f * ccRough - 0.04f;
+                float a004 = fminf(rx * rx, exp2f(-9.28f * nv)) * rx + ry;
+                float ebrdf = 0.04f * (rz - 1.04f * a004) + (1.04f * a004 + rw);
+                ccIndirect = (V){er * ebrdf, eg * ebrdf, eb * ebrdf};
+            }
             float scale = 1.0f - cc * ccFcc;
-            V ccAdd = {cc * ccDirect.x * Tseg.x, cc * ccDirect.y * Tseg.y, cc * ccDirect.z * Tseg.z};
+            V ccAdd = {cc * (ccDirect.x + ccIndirect.x) * Tseg.x,
+                       cc * (ccDirect.y + ccIndirect.y) * Tseg.y,
+                       cc * (ccDirect.z + ccIndirect.z) * Tseg.z};
             outgoing = add(mul(outgoing, scale), ccAdd);
         }
         return outgoing;

@@ -74,7 +74,7 @@ The glTF test scenes (lamp, dragon, dish, suzanne, …) live in
 | KHR_materials_iridescence (thin film, three.js parity model; texture-driven factor + thickness, both slots) | Done (both backends) |
 | KHR_materials_emissive_strength (factor × strength applied at load; >1 radiance unclamped) | Done |
 | KHR_materials_anisotropy (anisotropic GGX direct + bent-normal mirror, three.js parity model; strength/rotation/texture, both backends) | Done (both backends) |
-| KHR_materials_clearcoat (second smooth GGX lobe + (1−cc·Fcc) energy, both backends; `ccN` = non-perturbed normal) | Direct lobe done; IBL + clearcoatNormalTexture open |
+| KHR_materials_clearcoat (second smooth GGX lobe + IBL + (1−cc·Fcc) energy, both backends; `ccN` = non-perturbed normal) | Direct + IBL done; clearcoatNormalTexture open |
 | glTF baseColorTexture (sRGB→linear, bilinear) | Done |
 | glTF ORM roughness (G channel × factor) | Done (linear sampling both backends) |
 | Unified per-pixel PBR (unified plastic/metallic, ORM.B → metallic, F0 = mix(0.04, basecolor, metallic)) | Done |

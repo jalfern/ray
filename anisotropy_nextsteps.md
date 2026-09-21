@@ -19,7 +19,7 @@ legacy set, but it is under the cert bar — `ok`, not `known-bug`.
 | Extension | Where | Status |
 |---|---|---|
 | KHR_materials_anisotropy (strength 1 + texture + rotation 0) | shade, mount arm | done (2026-09-11, both backends — see gap 1) |
-| KHR_materials_clearcoat (0.25 / rough 0.15 + normal tex) | shade, back plate | direct lobe + energy done (Stage 1, both backends); IBL + clearcoatNormal open |
+| KHR_materials_clearcoat (0.25 / rough 0.15 + normal tex) | shade, back plate | direct + IBL + energy done (Stages 1–2, both backends); clearcoatNormal open |
 | KHR_materials_emissive_strength (25x) | filament | done (2026-09-11: factor × strength at load) |
 | KHR_materials_transmission + volume (thick 0.01) | glass bulb | done |
 
@@ -53,16 +53,19 @@ legacy set, but it is under the cert bar — `ok`, not `known-bug`.
    `shaders.metal`), so no shader mirror was needed — parser-only change.
    Default strength 1.0 keeps every other scene bit-identical (verified:
    full gate set PASSes with signatures unchanged to the digit).
-3. **Clearcoat — direct lobe LANDED (2026-09, Stages 0–1).** Loader parses
+3. **Clearcoat — direct + IBL LANDED (2026-09, Stages 0–2).** Loader parses
    `KHR_materials_clearcoat` (factor/roughness/normalTexture) plumbed through
    `MeshObj`/`MeshMatGpu`/`MeshMat` (struct 144→156, paired asserts). Stage 1
    adds the direct GGX lobe (`f0=0.04`, `alpha=ccRough²`) + the
    `outgoing·(1−cc·Fcc) + cc·lobe` composite, mirrored op-for-op CPU↔GPU
    (`ccN` = non-perturbed normal). Gate green; non-coat scenes byte-identical
-   (cc>0 gate airtight); aniso rebaselined `ok` (p99_9=14, n_severe=0).
-   **Still open:** Stage 2 IBL (prefiltered PMREM tap × DFGApprox
-   `EnvironmentBRDF`, both backends — the higher-parity-risk surface) and
-   Stage 3 `clearcoatNormalTexture` (reuse the existing TBN).
+   (cc>0 gate airtight); aniso rebaselined `ok`. Stage 2 (2026-09) adds the
+   clearcoat IBL — prefiltered PMREM tap about `ccN` at `ccRough` (three's
+   `mix(reflect, N, rough²)`), weighted by the Karis DFGApprox `EnvironmentBRDF`
+   (f0=0.04, f90=1), added into the `cc·(direct + indirect)` composite; both
+   backends read the same CPU mip chain (envtest path). Aniso rebaselined `ok`
+   again (p99_9=14, n_severe=0). **Still open:** Stage 3 `clearcoatNormalTexture`
+   (reuse the existing TBN).
 4. **No GLB container.** Had to unpack the `.glb` by hand into
    `.gltf` + `.bin` + 4 PNGs (kept in `test_scenes/AnisotropyBarnLamp/`).
    A GLB reader (12-byte header, JSON/BIN chunks, embedded buffer + images)
